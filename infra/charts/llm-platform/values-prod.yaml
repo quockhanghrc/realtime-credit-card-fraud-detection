@@ -1,0 +1,38 @@
+storageClass: cloud-block
+
+# The three servers share one 4 vCPU / 16 GiB GPU node, which leaves about 3.1 CPU and 12 GiB for pods.
+models:
+  chat:
+    resources:
+      requests: {cpu: 1500m, memory: 6Gi}
+      limits: {memory: 10Gi}
+  embedding:
+    resources:
+      requests: {cpu: 500m, memory: 2Gi}
+      limits: {memory: 4Gi}
+  decision:
+    resources:
+      requests: {cpu: 250m, memory: 2560Mi}
+      limits: {memory: 6Gi}
+
+agents:
+  snapshotRoot: s3://talos-proxmox-prod-platform/substrate/llm-agents/
+
+langfuseStores:
+  postgres:
+    size: 2Gi
+    nodeSelector:
+      talos.dev/capacity-type: on-demand
+  hostname: langfuse.phuchoang.sbs
+  oidc:
+    issuer: https://auth.phuchoang.sbs/dex
+
+langfuse:
+  langfuse:
+    nextauth:
+      url: https://langfuse.phuchoang.sbs
+  s3:
+    bucket: talos-proxmox-prod-platform
+    endpoint: https://storage.googleapis.com
+    region: auto
+    forcePathStyle: true

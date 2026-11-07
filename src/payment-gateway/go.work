@@ -1,0 +1,11 @@
+go 1.26.0
+
+use (
+ ./fraud
+	./shared
+	./edge
+	./notifier
+	./payments
+	./processor-simulator
+	./vault-simulator
+)

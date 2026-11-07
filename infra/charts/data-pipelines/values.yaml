@@ -1,0 +1,357 @@
+global:
+  imageTags:
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/live-simulator: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/data-platform-spark: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/data-platform-metadata: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/feast: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/streaming: dev
+enabled: false
+namespace: data
+images:
+  simulator:
+    repository: ghcr.io/phuchoang2603/payment-gateway-fraud-detection/live-simulator
+  spark:
+    repository: ghcr.io/phuchoang2603/payment-gateway-fraud-detection/data-platform-spark
+  openmetadata:
+    repository: ghcr.io/phuchoang2603/payment-gateway-fraud-detection/data-platform-metadata
+  feast:
+    pullPolicy: IfNotPresent
+    repository: ghcr.io/phuchoang2603/payment-gateway-fraud-detection/feast
+  streaming:
+    pullPolicy: IfNotPresent
+    repository: ghcr.io/phuchoang2603/payment-gateway-fraud-detection/streaming
+generator:
+  config: historical-dev.yaml
+  shards: 1
+  workers: 2
+  retryLimit: 2
+  activeDeadlineSeconds: 21600
+  nodeSelector: {}
+  resources:
+    requests:
+      cpu: '2'
+      memory: 4Gi
+      ephemeral-storage: 20Gi
+    limits:
+      cpu: '4'
+      memory: 8Gi
+      ephemeral-storage: 40Gi
+config:
+  AWS_REGION: us-east-1
+  S3_ENDPOINT: https://minio.home.phuchoang.sbs
+  S3_PATH_STYLE: 'true'
+storage:
+  checksums:
+    requestCalculation: WHEN_SUPPORTED
+    responseValidation: WHEN_SUPPORTED
+  externalSecret:
+    name: gateway-storage
+    store: gateway-doppler
+    data:
+      AWS_ACCESS_KEY_ID: OBJECT_GATEWAY_ACCESS_KEY_ID
+      AWS_SECRET_ACCESS_KEY: OBJECT_GATEWAY_SECRET_ACCESS_KEY
+# Node selector for pipeline workflow pods (resource steps, checks, publication); empty schedules them anywhere.
+workflowNodeSelector: {}
+spark:
+  nodeSelector: {}
+  # Driver placement when it differs from the executors'; empty uses nodeSelector.
+  driverNodeSelector: {}
+  tolerations: []
+  retry:
+    limit: 2
+    policy: OnError
+  # Executor sizes for a prod spot node (e2-standard-4, 40Gi boot disk, allocatable about 3.5 vCPU and 14 GiB).
+  # Each profile names the executor count and shuffle partitions; `dev` fits one dev node and `large` fills the prod
+  # pool: 11 executors of 3 cores, one per node, with the 12th node left for the driver.
+  profiles:
+    dev:
+      executors: 1
+      shufflePartitions: 16
+      advisoryPartitionSize: 128m
+      driver:
+        cores: 1
+        requestCores: 500m
+        memory: 2g
+        memoryOverhead: 512m
+        ephemeralStorage: 5Gi
+      # Dev nodes keep about 1.5 CPU and 7 GiB free next to Flink, OpenMetadata and ClickHouse.
+      executor:
+        cores: 2
+        requestCores: '1'
+        memory: 4g
+        memoryOverhead: 1g
+        ephemeralStorage: 10Gi
+    large:
+      executors: 11
+      shufflePartitions: 2048
+      advisoryPartitionSize: 128m
+      driver:
+        cores: 1
+        requestCores: '1'
+        memory: 4g
+        memoryOverhead: 1g
+        ephemeralStorage: 8Gi
+      executor:
+        cores: 3
+        memory: 9g
+        memoryOverhead: 2g
+        ephemeralStorage: 24Gi
+bronze:
+  enabled: false
+  datasetVersion: v18
+  historicalRoot: s3://platform-dev/datasets/payment-gateway/historical/v18
+  reportRoot: s3://platform-dev/runs/payment-gateway/dp1
+  historicalProfile: dev
+  activeDeadlineSeconds: 7200
+  kafka:
+    bootstrapServers: payment-gateway-kafka-kafka-bootstrap.payment-gateway.svc:9092
+    # Must match the topic partition count of payments.events.v1 and fraud.labels.v1 in infra/charts/kafka/values.yaml.
+    # The Spark Kafka source makes one task per partition, so executor cores and shuffle partitions follow this value.
+    partitions: 3
+    executorMemory: 6g
+    executorMemoryOverhead: 1g
+    ephemeralStorage: 10Gi
+analytics:
+  enabled: false
+  profile: dev
+  reportRoot: s3://platform-dev/runs/payment-gateway/analytics
+  activeDeadlineSeconds: 14400
+maintenance:
+  enabled: false
+  suspend: true
+  profile: dev
+  reportRoot: s3://platform-dev/runs/payment-gateway/maintenance
+  activeDeadlineSeconds: 7200
+  schedule: 43 3 * * *
+pipeline:
+  enabled: false
+  suspend: true
+  profile: dev
+  reportRoot: s3://platform-dev/runs/payment-gateway/pipeline
+  activeDeadlineSeconds: 14400
+  # dp-daily at 04:17 UTC, after the 03:43 maintenance; suspended unless pipeline.suspend is false. Without start and end a run covers yesterday and
+  # the lookback days before it, which catches late outcomes.
+  schedule: 17 4 * * *
+  lookbackDays: 2
+marts:
+  clickhouseUrl: http://clickhouse.data.svc.cluster.local:8123
+  user: marts
+  # The clickhouse chart's ExternalSecret for the marts user in the same namespace.
+  passwordSecret: clickhouse-marts
+  retentionDays: 90
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+warehouseBenchmark:
+  enabled: false
+  reportRoot: s3://platform-dev/runs/payment-gateway/warehouse-benchmark
+  activeDeadlineSeconds: 7200
+dashboards:
+  enabled: false
+  folder: Payments analytics
+catalog:
+  icebergRestUri: http://iceberg-catalog.data.svc.cluster.local:8181/api/catalog
+  icebergWarehouse: lakehouse
+  icebergClientId: platform
+  icebergOauth2Uri: http://iceberg-catalog.data.svc.cluster.local:8181/api/catalog/v1/oauth/tokens
+  openmetadataUrl: http://openmetadata.data.svc.cluster.local:8585/api
+  kafkaClient: data-pipelines
+  icebergSecret:
+    name: data-pipelines-iceberg
+    store: gateway-doppler
+    data:
+      ICEBERG_CLIENT_SECRET: ICEBERG_CLIENT_SECRET
+  openmetadataSecret:
+    name: data-pipelines-openmetadata
+    store: gateway-doppler
+    data:
+      OPENMETADATA_TOKEN: OPENMETADATA_TOKEN
+  connectors:
+    clickhouse:
+      externalSecret:
+        name: metadata-clickhouse
+        store: gateway-doppler
+        data:
+          CLICKHOUSE_PASSWORD: CLICKHOUSE_OPENMETADATA_PASSWORD
+      kind: database
+      discover: true
+      source:
+        type: clickhouse
+        serviceName: clickhouse
+        serviceConnection:
+          config:
+            type: Clickhouse
+            username: openmetadata
+            password: ${CLICKHOUSE_PASSWORD}
+            hostPort: clickhouse.data.svc.cluster.local:8123
+            https: false
+        sourceConfig:
+          config:
+            type: DatabaseMetadata
+            schemaFilterPattern:
+              includes:
+              - ^lakehouse$
+              - ^marts$
+            tableFilterPattern:
+              includes:
+              - ^bronze\.
+              - ^silver\.
+              - ^gold\.
+              - ^fact_
+              - ^build_info$
+              excludes:
+              - __staging$
+            markDeletedTables: false
+            includeStoredProcedures: false
+            overrideMetadata: false
+    kafka:
+      kind: messaging
+      discover: true
+      source:
+        type: kafka
+        serviceName: payment-gateway-kafka
+        serviceConnection:
+          config:
+            type: Kafka
+            bootstrapServers: payment-gateway-kafka-kafka-bootstrap.payment-gateway.svc.cluster.local:9092
+            securityProtocol: PLAINTEXT
+            schemaRegistryURL: http://schema-registry.payment-gateway.svc.cluster.local:8081
+            consumerConfig:
+              enable.auto.commit: false
+        sourceConfig:
+          config:
+            type: MessagingMetadata
+            topicFilterPattern:
+              includes:
+              - ^payments\.events\.v1$
+              - ^fraud\.labels\.v1$
+              - ^fraud\.feature-updates\.v2\..*$
+              - ^fraud\.feature-rejects\.v1\..*$
+            generateSampleData: false
+            markDeletedTopics: false
+            overrideMetadata: false
+    argo:
+      kind: pipeline
+      discover: false
+      source:
+        serviceName: argo
+        serviceConnection:
+          config:
+            type: CustomPipeline
+    object-storage:
+      externalSecret:
+        name: metadata-object-storage
+        store: gateway-doppler
+        data:
+          AWS_ACCESS_KEY_ID: OBJECT_GATEWAY_ACCESS_KEY_ID
+          AWS_SECRET_ACCESS_KEY: OBJECT_GATEWAY_SECRET_ACCESS_KEY
+      kind: storage
+      discover: false
+      source:
+        type: s3
+        serviceName: platform-object-storage
+        serviceConnection:
+          config:
+            type: S3
+            awsConfig:
+              awsAccessKeyId: ${AWS_ACCESS_KEY_ID}
+              awsSecretAccessKey: ${AWS_SECRET_ACCESS_KEY}
+              awsRegion: us-east-1
+              endPointURL: https://minio.home.phuchoang.sbs
+            bucketNames:
+            - platform-dev
+    flink:
+      kind: pipeline
+      discover: true
+      source:
+        type: flink
+        serviceName: fraud-flink
+        serviceConnection:
+          config:
+            type: Flink
+            hostPort: http://fraud-streaming-live-v20-rest.data.svc.cluster.local:8081
+        sourceConfig:
+          config:
+            type: PipelineMetadata
+checks:
+  connectorsConfigMap: metadata-connectors
+  connectorSecret: metadata-clickhouse
+  # Limit for each table's `metadata test` run; each contract rule is a ClickHouse scan over the lakehouse table.
+  nativeTimeoutSeconds: 1500
+features:
+  enabled: false
+  suspend: true
+  driverMemory: 6g
+  spillSize: 100Gi
+  # Storage class for the spill volume of materialization and the history seed; empty uses node disk.
+  scratchClass: ""
+  materializeResources:
+    requests: {cpu: "2", memory: 8Gi, ephemeral-storage: 2Gi}
+    limits: {memory: 12Gi, ephemeral-storage: 4Gi}
+  registry: s3://platform-dev/runs/payment-gateway/feast/registry.pb
+  reportRoot: s3://platform-dev/runs/payment-gateway/feast
+  epochs: history-v20,live-v20
+  epoch: live-v20
+  historyEpoch: history-v20
+  schedule: 47 6 * * *
+  checkpointRoot: s3://platform-dev/runs/payment-gateway/flink/history
+  replicationFactor: 1
+  historyStart: "2026-07-29"
+  # Each unit is one single-partition logical-clock Flink job, so units in parallel are the only way to scale a replay.
+  historyUnitDays: 7
+  historyParallelism: 2
+  historyWriterParallelism: 2
+  historyEnd: "2026-10-29"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: '1'
+      memory: 1Gi
+  redis:
+    name: payment-gateway-feast-redis
+    image:
+      repository: quay.io/opstree/redis
+      tag: v7.2.16
+      pullPolicy: IfNotPresent
+    appendonly: 'yes'
+    storageSize: 2Gi
+    maxmemory: 512mb
+    resources:
+      requests:
+        cpu: 100m
+        memory: 768Mi
+      limits:
+        cpu: 500m
+        memory: 1536Mi
+    password:
+      secretName: payment-gateway-feast-redis
+      secretKey: password
+      remoteKey: GATEWAY_FEAST_REDIS_PASSWORD
+    clients:
+    - feature-writer
+    - feast-server
+    - data-pipelines
+  streaming:
+    sourceTopic: payments.events.v1
+    sourcePartitions: 3
+    maxEntityEntries: 50000
+    storageRoot: s3://platform-dev/runs/payment-gateway/flink
+    jobManager:
+      resources:
+        requests:
+          cpu: '1'
+          memory: 1536Mi
+        limits:
+          memory: 1536Mi
+    taskManager:
+      resources:
+        requests:
+          cpu: '1'
+          memory: 2Gi
+        limits:
+          memory: 2Gi

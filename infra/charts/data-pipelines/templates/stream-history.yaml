@@ -1,0 +1,429 @@
+{{- if .Values.features.enabled }}
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: stream-history
+  namespace: {{ .Values.namespace }}
+spec:
+  serviceAccountName: data-pipelines
+  {{- include "data-pipelines.workflowPlacement" $ | nindent 2 }}
+  entrypoint: months
+  activeDeadlineSeconds: 2678400
+  synchronization:
+    mutexes:
+      - name: stream-history
+  arguments:
+    parameters:
+      - {name: start, value: {{ .Values.features.historyStart | quote }}}
+      - {name: end, value: {{ .Values.features.historyEnd | quote }}}
+  podMetadata:
+    labels:
+      app.kubernetes.io/name: data-pipelines
+  podGC:
+    strategy: OnPodCompletion
+    deleteDelayDuration: 5m
+    labelSelector:
+      matchLabels:
+        data-pipelines.fraud-detection.dev/scratch: "true"
+  templates:
+    - name: months
+      # Caps concurrent units only; a workflow-level cap would also count each unit's own steps.
+      parallelism: {{ .Values.features.historyParallelism }}
+      steps:
+        - - name: plan
+            template: plan
+        - - name: unit
+            template: unit
+            arguments:
+              parameters:
+                - {name: start, value: {{ "{{item.start}}" | quote }}}
+                - {name: end, value: {{ "{{item.end}}" | quote }}}
+                - {name: run, value: {{ printf "%s-{{item.id}}" .Values.features.historyEpoch | quote }}}
+            withParam: {{ "{{steps.plan.outputs.parameters.units}}" | quote }}
+            hooks:
+              exit:
+                template: finish-unit
+                arguments:
+                  parameters:
+                    - {name: start, value: {{ "{{item.start}}" | quote }}}
+                    - {name: run, value: {{ printf "%s-{{item.id}}" .Values.features.historyEpoch | quote }}}
+    - name: plan
+      outputs:
+        parameters:
+          - name: units
+            valueFrom: {path: /tmp/units}
+      container:
+        image: {{ include "data-pipelines.image" (dict "image" .Values.images.streaming "global" .Values.global) | quote }}
+        command: [/app/.venv/bin/python, -m, fraud_streaming.history]
+        args: [units, --start, {{ "{{workflow.parameters.start}}" | quote }}, --end, {{ "{{workflow.parameters.end}}" | quote }}, --days, {{ .Values.features.historyUnitDays | quote }}]
+        env:
+          - {name: HISTORY_RANGE_START, value: {{ .Values.features.historyStart | quote }}}
+          - {name: HISTORY_RANGE_END, value: {{ .Values.features.historyEnd | quote }}}
+    - name: unit
+      parallelism: 1
+      inputs:
+        parameters:
+          - {name: start}
+          - {name: end}
+          - {name: run}
+      steps:
+        - - name: seed
+            template: seed
+            arguments:
+              parameters:
+                - {name: start, value: {{ "{{inputs.parameters.start}}" | quote }}}
+                - {name: end, value: {{ "{{inputs.parameters.end}}" | quote }}}
+                - {name: run, value: {{ "{{inputs.parameters.run}}" | quote }}}
+        - - name: flink
+            template: flink
+            arguments:
+              parameters:
+                - {name: start, value: {{ "{{inputs.parameters.start}}" | quote }}}
+                - {name: run, value: {{ "{{inputs.parameters.run}}" | quote }}}
+        - - name: verify
+            template: verify
+            arguments:
+              parameters:
+                - {name: start, value: {{ "{{inputs.parameters.start}}" | quote }}}
+                - {name: end, value: {{ "{{inputs.parameters.end}}" | quote }}}
+                - {name: run, value: {{ "{{inputs.parameters.run}}" | quote }}}
+        - - name: writer
+            template: writer
+            arguments:
+              parameters:
+                - {name: start, value: {{ "{{inputs.parameters.start}}" | quote }}}
+                - {name: end, value: {{ "{{inputs.parameters.end}}" | quote }}}
+                - {name: run, value: {{ "{{inputs.parameters.run}}" | quote }}}
+        - - name: delete-topics
+            template: delete-topics
+            arguments:
+              parameters:
+                - {name: run, value: {{ "{{inputs.parameters.run}}" | quote }}}
+            continueOn: {failed: true, error: true}
+    - name: flink
+      inputs:
+        parameters:
+          - {name: start}
+          - {name: run}
+      resource:
+        action: create
+        setOwnerReference: true
+        successCondition: status.jobStatus.state == FINISHED
+        failureCondition: status.jobStatus.state == FAILED
+        manifest: |
+          apiVersion: flink.apache.org/v1beta1
+          kind: FlinkDeployment
+          metadata:
+            name: fraud-streaming-{{ "{{inputs.parameters.run}}" }}
+            namespace: {{ .Values.namespace }}
+          spec:
+            image: {{ include "data-pipelines.image" (dict "image" .Values.images.streaming "global" $.Values.global) | quote }}
+            imagePullPolicy: IfNotPresent
+            flinkVersion: v2_2
+            serviceAccount: fraud-streaming
+            flinkConfiguration:
+              taskmanager.numberOfTaskSlots: '1'
+              taskmanager.rpc.port: '6122'
+              taskmanager.data.port: '6121'
+              blob.server.port: '6124'
+              metrics.internal.query-service.port: '6125'
+              metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+              metrics.reporter.prom.port: '9249'
+              state.backend.type: rocksdb
+              execution.checkpointing.incremental: 'true'
+              taskmanager.memory.managed.fraction: '0.5'
+              execution.shutdown-on-application-finish: "false"
+              execution.checkpointing.interval: 10s
+              execution.checkpointing.storage: filesystem
+              execution.checkpointing.mode: EXACTLY_ONCE
+              execution.checkpointing.dir: {{ printf "%s/checkpoints/%s" .Values.features.checkpointRoot "{{workflow.name}}/{{inputs.parameters.start}}" | quote }}
+              execution.checkpointing.savepoint-dir: {{ printf "%s/savepoints/%s" .Values.features.checkpointRoot "{{workflow.name}}/{{inputs.parameters.start}}" | quote }}
+              # Unaligned checkpoints let barriers overtake the data queued in front of a slow operator, so a checkpoint
+              # does not wait for the backlog to drain. A slow one is tolerated instead of failing the job: an expiry used
+              # to restart the job from an old checkpoint, and the loop rewrote the same journal until the broker disk filled.
+              execution.checkpointing.unaligned.enabled: 'true'
+              execution.checkpointing.unaligned.interruptible-timers.enabled: 'true'
+              execution.checkpointing.tolerable-failed-checkpoints: '10'
+              execution.checkpointing.min-pause: 2min
+              execution.checkpointing.timeout: 10min
+              execution.checkpointing.num-retained: '3'
+              taskmanager.network.memory.buffer-debloat.enabled: 'true'
+              execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
+              high-availability.type: kubernetes
+              high-availability.kubernetes.leader-election.lease-duration: 60s
+              high-availability.kubernetes.leader-election.renew-deadline: 45s
+              high-availability.storageDir: {{ printf "%s/checkpoints/ha/%s" .Values.features.checkpointRoot "{{workflow.name}}/{{inputs.parameters.start}}" | quote }}
+              s3.endpoint: {{ .Values.config.S3_ENDPOINT | quote }}
+              s3.path.style.access: {{ .Values.config.S3_PATH_STYLE | toString | quote }}
+              s3.region: {{ .Values.config.AWS_REGION | quote }}
+              {{- if eq .Values.config.S3_ENDPOINT "https://storage.googleapis.com" }}
+              fs.s3a.endpoint.region: {{ .Values.config.AWS_REGION | quote }}
+              {{- end }}
+              restart-strategy.type: exponential-delay
+              resourcemanager.taskmanager-registration.timeout: 10min
+              slot.request.timeout: 15min
+            # One job, one TaskManager. A burst node has 4 vCPU, so two units fit on it: the JobManager only coordinates
+            # checkpoints and the TaskManager uses about 1.5 cores.
+            jobManager:
+              {{- with .Values.workflowNodeSelector }}
+              podTemplate:
+                spec:
+                  nodeSelector:
+                    {{- toYaml . | nindent 20 }}
+              {{- end }}
+              resources:
+                requests: {cpu: 200m, memory: 1280Mi}
+                limits: {memory: 1280Mi}
+            taskManager:
+              podTemplate:
+                spec:
+                  {{- include "data-pipelines.placement" $ | nindent 18 }}
+              resources:
+                requests: {cpu: 1400m, memory: 5Gi}
+                limits: {memory: 5Gi}
+            podTemplate:
+              metadata:
+                annotations:
+                  cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+                labels:
+                  app.kubernetes.io/name: fraud-streaming
+                  istio.io/dataplane-mode: none
+              spec:
+                securityContext:
+                  runAsNonRoot: true
+                  runAsUser: 9999
+                  runAsGroup: 9999
+                  fsGroup: 9999
+                  seccompProfile:
+                    type: RuntimeDefault
+                containers:
+                  - name: flink-main-container
+                    ports:
+                      - {name: metrics, containerPort: 9249, protocol: TCP}
+                    env:
+                      {{- if eq .Values.config.S3_ENDPOINT "https://storage.googleapis.com" }}
+                      - name: ENABLE_BUILT_IN_PLUGINS
+                        value: flink-s3-fs-hadoop-2.2.1.jar
+                      {{- end }}
+                      - name: AWS_ACCESS_KEY_ID
+                        valueFrom:
+                          secretKeyRef:
+                            name: {{ .Values.storage.externalSecret.name }}
+                            key: AWS_ACCESS_KEY_ID
+                      - name: AWS_SECRET_ACCESS_KEY
+                        valueFrom:
+                          secretKeyRef:
+                            name: {{ .Values.storage.externalSecret.name }}
+                            key: AWS_SECRET_ACCESS_KEY
+                      - name: KAFKA_BROKERS
+                        value: {{ .Values.bronze.kafka.bootstrapServers | quote }}
+                      - name: FEATURE_EPOCH
+                        value: {{ .Values.features.historyEpoch | quote }}
+                      - name: FEATURE_TOPIC
+                        value: {{ "fraud.feature-updates.v2.{{inputs.parameters.run}}" | quote }}
+                      - name: SOURCE_TOPIC
+                        value: {{ "payments.events.{{inputs.parameters.run}}" | quote }}
+                      - name: SOURCE_PARTITIONS
+                        value: {{ "1" | quote }}
+                      - name: CLOCK_MODE
+                        value: logical
+                      - name: CLOCK_TOPIC
+                        value: {{ "fraud.clock.{{inputs.parameters.run}}" | quote }}
+                      - name: STREAM_RUN
+                        value: {{ "{{inputs.parameters.run}}" | quote }}
+                      - name: MAX_ENTITY_ENTRIES
+                        value: {{ "50000" | quote }}
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      capabilities:
+                        drop: [ALL]
+            job:
+              jarURI: local:///opt/flink/opt/fraud-streaming.jar
+              entryClass: dev.fraud.stream.StreamJob
+              parallelism: 1
+              upgradeMode: stateless
+              state: running
+    {{- range $mode := list "seed" "verify" "writer" "delete-topics" }}
+    - name: {{ $mode }}
+      {{- if eq $mode "writer" }}
+      synchronization:
+        semaphores:
+          - configMapKeyRef:
+              name: stream-history-limits
+              key: writers
+      {{- end }}
+      {{- if has $mode (list "seed" "verify" "writer") }}
+      {{- include "data-pipelines.placement" $ | nindent 6 }}
+      {{- end }}
+      {{- if eq $mode "seed" }}
+      metadata:
+        labels:
+          data-pipelines.fraud-detection.dev/scratch: "true"
+      # A fresh sort volume is owned by root; the streaming image runs as the flink group.
+      securityContext: {fsGroup: 9999}
+      {{- end }}
+      {{- if has $mode (list "seed" "verify" "writer") }}
+      # A spot reclaim or a transient catalog or broker error retries the step. The seed recreates its topics empty
+      # before writing, and the writer replaces the unit's rows, so a retry leaves one copy.
+      # Backoff without maxDuration: Argo measures maxDuration from the step's first start, so a seed reclaimed after
+      # two minutes would never retry.
+      retryStrategy:
+        limit: 5
+        retryPolicy: Always
+        backoff: {duration: 30s, factor: 2, cap: 5m}
+      {{- end }}
+      inputs:
+        parameters:
+          - {name: run}
+          {{- if has $mode (list "seed" "verify" "writer") }}
+          - {name: start}
+          {{- end }}
+          {{- if has $mode (list "seed" "verify" "writer") }}
+          - {name: end}
+          {{- end }}
+      container:
+        {{- if has $mode (list "seed" "delete-topics") }}
+        image: {{ include "data-pipelines.image" (dict "image" $.Values.images.streaming "global" $.Values.global) | quote }}
+        command: [/app/.venv/bin/python, -m, fraud_streaming.history]
+        {{- if eq $mode "seed" }}
+        args: [seed, --start, {{ "{{inputs.parameters.start}}" | quote }}, --end, {{ "{{inputs.parameters.end}}" | quote }}]
+        {{- else }}
+        args: [topics, --delete]
+        {{- end }}
+        {{- else }}
+        image: {{ include "data-pipelines.image" (dict "image" $.Values.images.feast "global" $.Values.global) | quote }}
+        {{- if eq $mode "verify" }}
+        command: [python, -m, fraud_feast.history]
+        args: [--start, {{ "{{inputs.parameters.start}}" | quote }}, --end, {{ "{{inputs.parameters.end}}" | quote }}]
+        {{- else }}
+        command: [python, -m, fraud_feast.stream_writer]
+        args: [--history, --history-start, {{ "{{inputs.parameters.start}}" | quote }}, --history-end, {{ "{{inputs.parameters.end}}" | quote }}]
+        {{- end }}
+        {{- end }}
+        env:
+          - name: FEATURE_EPOCH
+            value: {{ $.Values.features.historyEpoch | quote }}
+          {{- if has $mode (list "verify" "writer") }}
+          - name: FEATURE_UPDATE_TOPIC
+            value: {{ "fraud.feature-updates.v2.{{inputs.parameters.run}}" | quote }}
+          - name: FEATURE_KAFKA_BROKERS
+            value: {{ $.Values.bronze.kafka.bootstrapServers | quote }}
+          - name: FEAST_STREAM_EPOCHS
+            value: {{ $.Values.features.historyEpoch | quote }}
+          - name: HISTORY_FLINK_URL
+            value: {{ "http://fraud-streaming-{{inputs.parameters.run}}-rest:8081" | quote }}
+          {{- end }}
+          - name: STREAM_RUN
+            value: {{ "{{inputs.parameters.run}}" | quote }}
+          {{- if has $mode (list "seed" "delete-topics") }}
+          - name: KAFKA_BROKERS
+            value: {{ $.Values.bronze.kafka.bootstrapServers | quote }}
+          {{- end }}
+          {{- if eq $mode "seed" }}
+          - name: HISTORY_REPLICATION_FACTOR
+            value: {{ $.Values.features.replicationFactor | quote }}
+          {{- end }}
+          {{- if eq $mode "seed" }}
+          - name: DATASET_VERSION
+            value: {{ $.Values.bronze.datasetVersion | quote }}
+          # The seed sorts one day of Bronze at a time; the sort and the file PyIceberg is decoding share the limit.
+          - {name: HISTORY_SORT_MEMORY, value: 3GB}
+          - {name: PYICEBERG_MAX_WORKERS, value: "2"}
+          {{- end }}
+          {{- if has $mode (list "seed" "verify" "writer") }}
+          - name: HISTORY_SEED_REPORT
+            value: {{ printf "%s/history/seeds/{{inputs.parameters.run}}.json" $.Values.features.reportRoot | quote }}
+          {{- end }}
+          {{- if has $mode (list "verify" "writer") }}
+          - name: RUN_REPORT
+            value: {{ printf "%s/history/{{workflow.name}}/{{inputs.parameters.start}}.json" $.Values.features.reportRoot | quote }}
+          {{- end }}
+          {{- if has $mode (list "seed" "verify" "writer") }}
+          {{- include "data-pipelines.lakeEnv" $ | nindent 10 }}
+          {{- include "data-pipelines.checksumEnv" $ | nindent 10 }}
+          {{- end }}
+        resources:
+          {{- if eq $mode "seed" }}
+          # DuckDB sorts a week of Bronze under HISTORY_SORT_MEMORY and spills the rest to the sort volume; the Arrow
+          # batches and the producer queue need the headroom above it.
+          requests: {cpu: "1", memory: 6Gi, ephemeral-storage: 2Gi}
+          limits: {memory: 8Gi, ephemeral-storage: 4Gi}
+          {{- else if eq $mode "verify" }}
+          requests: {cpu: 100m, memory: 512Mi, ephemeral-storage: 256Mi}
+          limits: {memory: 1Gi, ephemeral-storage: 1Gi}
+          {{- else if eq $mode "writer" }}
+          requests: {cpu: 500m, memory: 2Gi, ephemeral-storage: 2Gi}
+          limits: {memory: 4Gi, ephemeral-storage: 4Gi}
+          {{- else }}
+          # The topic cleanup only calls the Kafka admin API, and it must fit in what the on-demand pool has left while
+          # the replay holds the burst pool.
+          requests: {cpu: 50m, memory: 128Mi, ephemeral-storage: 256Mi}
+          limits: {memory: 512Mi, ephemeral-storage: 1Gi}
+          {{- end }}
+        {{- if eq $mode "seed" }}
+        volumeMounts:
+          - {name: sort, mountPath: /tmp/history-sort}
+      volumes:
+        {{- include "data-pipelines.featureScratch" (dict "root" $ "name" "sort" "size" "60Gi") | nindent 8 }}
+        {{- end }}
+    {{- end }}
+    - name: cleanup
+      inputs:
+        parameters:
+          - {name: run}
+      steps:
+        - - name: stop
+            template: stop
+            arguments:
+              parameters:
+                - {name: run, value: {{ "{{inputs.parameters.run}}" | quote }}}
+            continueOn: {failed: true, error: true}
+    - name: stop
+      inputs:
+        parameters:
+          - {name: run}
+      resource:
+        action: delete
+        flags: [--ignore-not-found=true, --wait=true]
+        manifest: |
+          apiVersion: flink.apache.org/v1beta1
+          kind: FlinkDeployment
+          metadata:
+            name: fraud-streaming-{{ "{{inputs.parameters.run}}" }}
+            namespace: {{ .Values.namespace }}
+    - name: finish-unit
+      inputs:
+        parameters:
+          - {name: start}
+          - {name: run}
+      steps:
+        - - name: cleanup
+            template: cleanup
+            arguments:
+              parameters:
+                - {name: run, value: {{ "{{inputs.parameters.run}}" | quote }}}
+            continueOn: {failed: true, error: true}
+        - - name: publish
+            template: publish
+            arguments:
+              parameters:
+                - {name: start, value: {{ "{{inputs.parameters.start}}" | quote }}}
+    - name: publish
+      inputs:
+        parameters:
+          - {name: start}
+      container:
+        image: {{ include "data-pipelines.image" (dict "image" .Values.images.openmetadata "global" .Values.global) | quote }}
+        command: [python, -m, openmetadata.publish]
+        env:
+          - {name: PIPELINES, value: stream-history}
+          - name: WORKFLOW_STATUS
+            value: {{ "{{workflow.status}}" | quote }}
+          - name: RUN_ID
+            value: {{ "{{workflow.name}}-{{inputs.parameters.start}}" | quote }}
+          - name: DATASET_VERSION
+            value: {{ .Values.bronze.datasetVersion | quote }}
+          - name: RUN_REPORT
+            value: {{ printf "%s/history/{{workflow.name}}/{{inputs.parameters.start}}.json" .Values.features.reportRoot | quote }}
+          {{- include "data-pipelines.env" . | nindent 10 }}
+{{- end }}

@@ -1,0 +1,153 @@
+{{- range $name, $svc := include "payment-gateway.services" . | fromYaml }}
+{{- $port := first $svc.ports }}
+{{- $image := include "payment-gateway.image" (dict "image" $svc.image "global" $.Values.global) }}
+---
+{{- if eq $name "edge" }}
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+{{- else }}
+apiVersion: apps/v1
+kind: Deployment
+{{- end }}
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+  labels:
+    {{- include "payment-gateway.selector" $name | nindent 4 }}
+spec:
+  replicas: {{ $svc.replicaCount }}
+  {{- if eq $name "edge" }}
+  {{- include "payment-gateway.canary" $ | nindent 2 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "payment-gateway.selector" $name | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        resource.opentelemetry.io/service.name: {{ $name | quote }}
+      labels:
+        {{- include "payment-gateway.selector" $name | nindent 8 }}
+        {{- if $svc.mesh.enabled }}
+        istio.io/dataplane-mode: ambient
+        {{- end }}
+    spec:
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ $svc.terminationGracePeriodSeconds }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      {{- if $svc.database }}
+      initContainers:
+        - name: migrate
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ $svc.image.pullPolicy }}
+          args: [migrate]
+          securityContext:
+            {{- include "payment-gateway.container-security" . | nindent 12 }}
+          env:
+            {{- include "payment-gateway.database-env" (dict "database" $svc.database "migrate" true) | nindent 12 }}
+      {{- end }}
+      containers:
+        - name: {{ $name }}
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ $svc.image.pullPolicy }}
+          securityContext:
+            {{- include "payment-gateway.container-security" . | nindent 12 }}
+          ports:
+            {{- range $svc.ports }}
+            - name: {{ .name }}
+              containerPort: {{ .containerPort }}
+              protocol: TCP
+            {{- end }}
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: {{ $name | quote }}
+            - name: TRACING_ENABLED
+              value: {{ $svc.telemetry.tracingEnabled | quote }}
+            - name: METRICS_ENABLED
+              value: {{ $svc.telemetry.metricsEnabled | quote }}
+            - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+              value: {{ $svc.telemetry.metricsEndpoint | quote }}
+            - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+              value: {{ $svc.telemetry.tracesEndpoint | quote }}
+            {{- if eq $name "edge" }}
+            - name: ROLLOUT_REVISION
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['rollouts-pod-template-hash']
+            {{- end }}
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: {{ printf "k8s.cluster.name=%s,deployment.environment=%s,k8s.namespace.name=%s%s" $.Values.telemetry.cluster $.Values.telemetry.environment $.Release.Namespace (ternary ",rollout.revision=$(ROLLOUT_REVISION)" "" (eq $name "edge")) | quote }}
+            - name: OTEL_TRACES_SAMPLER_ARG
+              value: {{ $svc.telemetry.samplingRatio | quote }}
+            - name: OTEL_METRIC_EXPORT_INTERVAL
+              value: {{ $svc.telemetry.metricExportInterval | quote }}
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: SERVICE_REVISION
+              value: {{ regexFind "[a-f0-9]{40}$" (index $.Values.global.imageTags $svc.image.repository) | default "dev" | quote }}
+            {{- if $svc.database }}
+            {{- include "payment-gateway.database-env" (dict "database" $svc.database "migrate" false) | nindent 12 }}
+            {{- end }}
+            {{- if and (eq $name "fraud-service") $.Values.features.enabled }}
+            - name: FRAUD_FEAST_URL
+              value: {{ $.Values.features.url | quote }}
+            - name: FRAUD_FEATURE_SERVICE
+              value: {{ $.Values.features.service | quote }}
+            - name: FRAUD_FEAST_TIMEOUT
+              value: {{ $.Values.features.timeout | quote }}
+            - name: FRAUD_FEATURE_TTL_DAILY
+              value: {{ $.Values.features.ttlDaily | quote }}
+            - name: FRAUD_FEATURE_TTL_STREAM
+              value: {{ $.Values.features.ttlStream | quote }}
+            - name: FRAUD_MODEL_URL
+              value: {{ $.Values.model.url | quote }}
+            - name: FRAUD_MODEL_NAME
+              value: {{ $.Values.model.name | quote }}
+            - name: FRAUD_MODEL_TIMEOUT
+              value: {{ $.Values.model.timeout | quote }}
+            - name: FRAUD_MODEL_THRESHOLD
+              value: {{ $.Values.model.threshold | quote }}
+            {{- end }}
+            {{- range $svc.externalSecrets }}
+            {{- $secretName := .name }}
+            {{- range .data }}
+            - name: {{ .env }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: {{ .secretKey }}
+            {{- end }}
+            {{- end }}
+            {{- with $svc.publicUrlEnv }}
+            - name: {{ . }}
+              value: {{ printf "https://%s" $.Values.ingress.tunnel.hostname | quote }}
+            {{- end }}
+            {{- with $svc.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- range $probe, $path := dict "liveness" "/health" "readiness" "/ready" }}
+          {{ $probe }}Probe:
+            {{- if eq $port.name "http" }}
+            httpGet:
+              path: {{ $path }}
+              port: {{ $port.containerPort }}
+            {{- else }}
+            grpc:
+              port: {{ $port.containerPort }}
+              service: {{ $probe }}
+            {{- end }}
+            {{- toYaml (index $svc.probes $probe) | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml $svc.resources | nindent 12 }}
+{{- end }}

@@ -1,0 +1,5 @@
+apiVersion: v2
+name: secret-store
+description: Shared Doppler ClusterSecretStore
+type: application
+version: 0.1.0

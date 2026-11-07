@@ -1,0 +1,161 @@
+{
+  "uid": "fraud-outcomes",
+  "title": "Fraud outcomes",
+  "tags": [
+    "payments",
+    "marts"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "time": {
+    "from": "now-90d",
+    "to": "now"
+  },
+  "refresh": "",
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Truth fraud caught by risk against missed",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse-marts"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse-marts"
+          },
+          "editorType": "sql",
+          "queryType": "timeseries",
+          "format": 0,
+          "rawSql": "SELECT toStartOfDay(started_at) AS time,\n  countIf(truth_is_fraud AND outcome = 'declined' AND decline_source = 'DECLINE_SOURCE_RISK') AS caught,\n  countIf(truth_is_fraud AND outcome = 'succeeded') AS missed\nFROM marts.fact_payment_attempt WHERE $__timeFilter(started_at) GROUP BY time ORDER BY time"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "description": "Simulation truth is a synthetic oracle."
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Chargeback rate",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse-marts"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse-marts"
+          },
+          "editorType": "sql",
+          "queryType": "timeseries",
+          "format": 0,
+          "rawSql": "SELECT toDateTime(day) AS time,\n  if(min(chargeback_window_complete), sum(chargebacks) / nullIf(sum(succeeded), 0), NULL) AS complete,\n  if(min(chargeback_window_complete), NULL, sum(chargebacks) / nullIf(sum(succeeded), 0)) AS provisional\nFROM marts.fact_merchant_day WHERE $__dateFilter(day) GROUP BY day ORDER BY day"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "Denominator: succeeded attempts. Days less than 21 days old are provisional."
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Risk decision against truth",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse-marts"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse-marts"
+          },
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "SELECT risk_outcome,\n  countIf(truth_is_fraud) AS fraud,\n  countIf(NOT truth_is_fraud) AS legitimate,\n  round(countIf(truth_is_fraud) / count(), 4) AS fraud_share\nFROM marts.fact_payment_attempt\nWHERE $__timeFilter(started_at) AND truth_is_fraud IS NOT NULL\nGROUP BY risk_outcome ORDER BY risk_outcome"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "description": "Simulation-truth labelled attempts by risk outcome. The historical policy is rule-based and records no risk score."
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "Scenario breakdown (synthetic oracle)",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse-marts"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse-marts"
+          },
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "SELECT truth_scenario, count() AS attempts,\n  countIf(outcome = 'succeeded') AS succeeded\nFROM marts.fact_payment_attempt WHERE $__timeFilter(started_at) AND truth_scenario IS NOT NULL\nGROUP BY truth_scenario ORDER BY attempts DESC"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    }
+  ]
+}

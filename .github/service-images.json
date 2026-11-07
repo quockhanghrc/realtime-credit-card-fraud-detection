@@ -1,0 +1,231 @@
+{
+  "include": [
+    {
+      "service": "fraud",
+      "image-suffix": "",
+      "context": ".",
+      "dockerfile": "infra/docker/go-service.Dockerfile",
+      "build-args": "SERVICE_PATH=src/payment-gateway/fraud\nBUILD_PKG=./cmd/fraud\nBUILD_BIN=fraud\nEXPOSE_PORT=8000\n",
+      "paths": [
+        "infra/docker/go-service.Dockerfile",
+        "src/payment-gateway/fraud",
+        "src/payment-gateway/shared"
+      ]
+    },
+    {
+      "service": "edge",
+      "image-suffix": "/edge",
+      "context": ".",
+      "dockerfile": "infra/docker/go-service.Dockerfile",
+      "build-args": "SERVICE_PATH=src/payment-gateway/edge\nBUILD_PKG=./cmd/edge\nBUILD_BIN=edge\nEXPOSE_PORT=8080\n",
+      "paths": [
+        "infra/docker/go-service.Dockerfile",
+        "src/payment-gateway/edge",
+        "src/payment-gateway/shared"
+      ]
+    },
+    {
+      "service": "payments",
+      "image-suffix": "/payments",
+      "context": ".",
+      "dockerfile": "infra/docker/go-service.Dockerfile",
+      "build-args": "SERVICE_PATH=src/payment-gateway/payments\nBUILD_PKG=./cmd/payments\nBUILD_BIN=payments\nEXPOSE_PORT=8000\n",
+      "paths": [
+        "infra/docker/go-service.Dockerfile",
+        "src/payment-gateway/payments",
+        "src/payment-gateway/shared"
+      ]
+    },
+    {
+      "service": "notifier",
+      "image-suffix": "/notifier",
+      "context": ".",
+      "dockerfile": "infra/docker/go-service.Dockerfile",
+      "build-args": "SERVICE_PATH=src/payment-gateway/notifier\nBUILD_PKG=./cmd/notifier\nBUILD_BIN=notifier\nEXPOSE_PORT=8000\n",
+      "paths": [
+        "infra/docker/go-service.Dockerfile",
+        "src/payment-gateway/notifier",
+        "src/payment-gateway/shared"
+      ]
+    },
+    {
+      "service": "vault-simulator",
+      "image-suffix": "/vault-simulator",
+      "context": ".",
+      "dockerfile": "infra/docker/go-service.Dockerfile",
+      "build-args": "SERVICE_PATH=src/payment-gateway/vault-simulator\nBUILD_PKG=./cmd/vault-simulator\nBUILD_BIN=vault-simulator\nEXPOSE_PORT=8000\n",
+      "paths": [
+        "infra/docker/go-service.Dockerfile",
+        "src/payment-gateway/vault-simulator",
+        "src/payment-gateway/shared"
+      ]
+    },
+    {
+      "service": "processor-simulator",
+      "image-suffix": "/processor-simulator",
+      "context": ".",
+      "dockerfile": "infra/docker/go-service.Dockerfile",
+      "build-args": "SERVICE_PATH=src/payment-gateway/processor-simulator\nBUILD_PKG=./cmd/processor-simulator\nBUILD_BIN=processor-simulator\nEXPOSE_PORT=8000\n",
+      "paths": [
+        "infra/docker/go-service.Dockerfile",
+        "src/payment-gateway/processor-simulator",
+        "src/payment-gateway/shared"
+      ]
+    },
+    {
+      "service": "connect-debezium",
+      "image-suffix": "/connect-debezium",
+      "context": ".",
+      "dockerfile": "infra/docker/connect-debezium.Dockerfile",
+      "paths": [
+        "infra/docker/connect-debezium.Dockerfile"
+      ]
+    },
+    {
+      "service": "schema-register",
+      "image-suffix": "/schema-register",
+      "context": ".",
+      "dockerfile": "infra/docker/schema-register.Dockerfile",
+      "paths": [
+        "infra/docker/schema-register.Dockerfile",
+        "contracts/payments/v1",
+        "scripts/schema_registry.py"
+      ]
+    },
+    {
+      "service": "live-simulator",
+      "image-suffix": "/live-simulator",
+      "context": ".",
+      "dockerfile": "infra/docker/live-simulator.Dockerfile",
+      "paths": [
+        "infra/docker/live-simulator.Dockerfile",
+        "src/data-pipeline/simulator",
+        "contracts/data-products/historical-payments"
+      ]
+    },
+    {
+      "service": "data-platform-metadata",
+      "image-suffix": "/data-platform-metadata",
+      "context": ".",
+      "dockerfile": "infra/docker/data-platform-metadata.Dockerfile",
+      "paths": [
+        "infra/docker/data-platform-metadata.Dockerfile",
+        "src/data-pipeline/openmetadata/openmetadata",
+        "contracts/data-products"
+      ]
+    },
+    {
+      "service": "data-platform-spark",
+      "image-suffix": "/data-platform-spark",
+      "context": ".",
+      "dockerfile": "infra/docker/data-platform-spark.Dockerfile",
+      "paths": [
+        "infra/docker/data-platform-spark.Dockerfile",
+        "src/data-pipeline/batch",
+        "contracts/data-products",
+        "contracts/payments",
+        "src/data-pipeline/feast"
+      ]
+    },
+    {
+      "service": "feast",
+      "image-suffix": "/feast",
+      "context": ".",
+      "dockerfile": "infra/docker/feast.Dockerfile",
+      "paths": [
+        "infra/docker/feast.Dockerfile",
+        "src/data-pipeline/feast"
+      ]
+    },
+    {
+      "service": "streaming",
+      "image-suffix": "/streaming",
+      "context": ".",
+      "dockerfile": "infra/docker/streaming.Dockerfile",
+      "paths": [
+        "infra/docker/streaming.Dockerfile",
+        "src/data-pipeline/streaming"
+      ]
+    },
+    {
+      "service": "rag-pipeline",
+      "image-suffix": "/rag-pipeline",
+      "context": ".",
+      "dockerfile": "infra/docker/rag-pipeline.Dockerfile",
+      "paths": [
+        "infra/docker/rag-pipeline.Dockerfile",
+        "src/llm/pyproject.toml",
+        "src/llm/uv.lock",
+        "src/llm/common",
+        "src/llm/rag_pipeline",
+        "openspec/specs",
+        "contracts/payments/v1",
+        "contracts/features/fraud-snapshot-v2.yaml",
+        "docs/payment-gateway/architecture.md",
+        "docs/data/products/silver-payments"
+      ]
+    },
+    {
+      "service": "rag-serving",
+      "image-suffix": "/rag-serving",
+      "context": ".",
+      "dockerfile": "infra/docker/rag-serving.Dockerfile",
+      "paths": [
+        "infra/docker/rag-serving.Dockerfile",
+        "src/llm/pyproject.toml",
+        "src/llm/uv.lock",
+        "src/llm/common",
+        "src/llm/rag_serving"
+      ]
+    },
+    {
+      "service": "agent-runtime",
+      "image-suffix": "/agent-runtime",
+      "context": ".",
+      "dockerfile": "infra/docker/agent-runtime.Dockerfile",
+      "paths": [
+        "infra/docker/agent-runtime.Dockerfile",
+        "src/llm/agent_runtime"
+      ]
+    },
+    {
+      "service": "ml",
+      "image-suffix": "/ml",
+      "context": ".",
+      "dockerfile": "infra/docker/ml.Dockerfile",
+      "paths": [
+        "infra/docker/ml.Dockerfile",
+        "src/ml/pyproject.toml",
+        "src/ml/uv.lock",
+        "src/ml/risk_model",
+        "src/ml/notebooks",
+        "src/data-pipeline/feast"
+      ]
+    },
+    {
+      "service": "drift",
+      "image-suffix": "/drift",
+      "context": ".",
+      "dockerfile": "infra/docker/drift.Dockerfile",
+      "paths": [
+        "infra/docker/drift.Dockerfile",
+        "src/ml/risk_model/__init__.py",
+        "src/ml/risk_model/drift.py",
+        "src/ml/risk_model/drift_service.py"
+      ]
+    },
+    {
+      "service": "risk-serving",
+      "image-suffix": "/risk-serving",
+      "context": ".",
+      "dockerfile": "infra/docker/risk-serving.Dockerfile",
+      "paths": [
+        "infra/docker/risk-serving.Dockerfile",
+        "src/llm/pyproject.toml",
+        "src/llm/uv.lock",
+        "src/llm/risk_serving",
+        "src/llm/common/fraud_rag_common/mcp_analysis.py"
+      ]
+    }
+  ]
+}

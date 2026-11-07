@@ -1,0 +1,371 @@
+global:
+  imageTags:
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/edge: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/payments: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/notifier: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/vault-simulator: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/processor-simulator: dev
+externalSecrets:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: gateway-doppler
+defaults:
+  enabled: true
+  replicaCount: 1
+  image:
+    pullPolicy: IfNotPresent
+  telemetry:
+    tracingEnabled: true
+    metricsEnabled: true
+    metricsEndpoint: http://vmagent-vmks.observability.svc.cluster.local:8429/opentelemetry/v1/metrics
+    tracesEndpoint: http://vtagent-vmks.observability.svc.cluster.local:10429/insert/opentelemetry/v1/traces
+    samplingRatio: '0.1'
+    metricExportInterval: 60000
+  mesh:
+    enabled: true
+    callers: []
+    callerNamespaces: []
+    rules: []
+  ports:
+  - name: grpc
+    containerPort: 8000
+    appProtocol: kubernetes.io/h2c
+  env: []
+  probes:
+    liveness:
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readiness:
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      timeoutSeconds: 5
+      failureThreshold: 3
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+  terminationGracePeriodSeconds: 30
+  externalSecrets: []
+  networkPolicy:
+    enabled: true
+    ingressFrom: []
+    egress: []
+  httpRoute:
+    enabled: false
+    hostnames: []
+    pathPrefix: /checkout/
+    timeouts:
+      request: 10s
+services:
+  edge:
+    image:
+      repository: ghcr.io/phuchoang2603/payment-gateway-fraud-detection/edge
+    mesh:
+      callers:
+      - payment-gateway-ingress-istio
+      - live-simulator
+      callerNamespaces:
+      - ecommerce
+    ports:
+    - name: http
+      containerPort: 8080
+    env:
+    - name: EDGE_HTTP_ADDR
+      value: :8080
+    - name: EDGE_PAYMENTS_ADDR
+      value: payments.payment-gateway.svc.cluster.local:8000
+    - name: EDGE_VAULT_ADDRESS
+      value: vault-simulator.payment-gateway.svc.cluster.local:8000
+    - name: EDGE_TRUSTED_PROXY_HEADER
+      value: X-Forwarded-For
+    - name: EDGE_TRUSTED_PROXY_HOPS
+      value: '1'
+    - name: EDGE_SYNTHETIC_FINGERPRINT_KEY
+      value: synthetic-fingerprint-v1
+    externalSecrets:
+    - name: edge-integrations
+      data:
+      - secretKey: integrations.json
+        remoteKey: GATEWAY_INTEGRATIONS_JSON
+        env: EDGE_INTEGRATIONS_JSON
+    - name: edge-secrets
+      data:
+      - secretKey: fingerprint-key
+        remoteKey: GATEWAY_FINGERPRINT_KEY
+        env: EDGE_FINGERPRINT_KEY
+      - secretKey: cookie-key
+        remoteKey: GATEWAY_CHECKOUT_COOKIE_KEY
+        env: EDGE_CHECKOUT_COOKIE_KEY
+    networkPolicy:
+      ingressFrom:
+      - podSelector:
+          matchLabels:
+            gateway.networking.k8s.io/gateway-name: payment-gateway-ingress
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/name: live-simulator
+    publicUrlEnv: EDGE_PUBLIC_BASE_URL
+    httpRoute:
+      enabled: true
+  fraud-service:
+    database: fraud
+    mesh:
+      callers:
+      - payments
+    image:
+      repository: ghcr.io/phuchoang2603/payment-gateway-fraud-detection
+  notifier:
+    image:
+      repository: ghcr.io/phuchoang2603/payment-gateway-fraud-detection/notifier
+    env:
+    - name: NOTIFIER_KAFKA_BROKERS
+      value: payment-gateway-kafka-kafka-bootstrap.payment-gateway.svc.cluster.local:9092
+    - name: NOTIFIER_KAFKA_TOPIC
+      value: payments.events.v1
+    - name: NOTIFIER_KAFKA_GROUP
+      value: gateway-notifier
+    externalSecrets:
+    - name: notifier-integrations
+      data:
+      - secretKey: integrations.json
+        remoteKey: GATEWAY_INTEGRATIONS_JSON
+        env: NOTIFIER_INTEGRATIONS_JSON
+    networkPolicy:
+      egress:
+      - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+        ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+      - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: payment-gateway-pg
+        ports:
+        - port: 5432
+          protocol: TCP
+      - to:
+        - podSelector:
+            matchLabels:
+              strimzi.io/cluster: payment-gateway-kafka
+        ports:
+        - port: 9092
+          protocol: TCP
+      - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+          podSelector:
+            matchExpressions:
+            - key: app.kubernetes.io/name
+              operator: In
+              values:
+              - vmagent
+              - vtagent
+        ports:
+        - port: 8429
+          protocol: TCP
+        - port: 10429
+          protocol: TCP
+      - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ecommerce
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: web
+        ports:
+        - port: 8080
+          protocol: TCP
+        - port: 15008
+          protocol: TCP
+    database: notifier
+  payments:
+    image:
+      repository: ghcr.io/phuchoang2603/payment-gateway-fraud-detection/payments
+    mesh:
+      callers:
+      - edge
+    env:
+    - name: PAYMENTS_GRPC_ADDR
+      value: :8000
+    - name: PAYMENTS_FRAUD_ADDR
+      value: fraud-service.payment-gateway.svc.cluster.local:8000
+    - name: PAYMENTS_PROCESSOR_ADDR
+      value: processor-simulator.payment-gateway.svc.cluster.local:8000
+    - name: PAYMENTS_REDIS_ADDR
+      value: payment-gateway-redis.payment-gateway.svc.cluster.local:6379
+    externalSecrets:
+    - name: payments-secrets
+      data:
+      - secretKey: redis-password
+        remoteKey: GATEWAY_REDIS_PASSWORD
+        env: PAYMENTS_REDIS_PASSWORD
+      - secretKey: encryption-key
+        remoteKey: GATEWAY_PAYMENTS_ENCRYPTION_KEY
+        env: PAYMENTS_ENCRYPTION_KEY
+      - secretKey: checkout-token-key
+        remoteKey: GATEWAY_CHECKOUT_TOKEN_KEY
+        env: PAYMENTS_CHECKOUT_TOKEN_KEY
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        memory: 512Mi
+    database: payments
+  processor-simulator:
+    image:
+      repository: ghcr.io/phuchoang2603/payment-gateway-fraud-detection/processor-simulator
+    mesh:
+      callers:
+      - payments
+    env:
+    - name: PROCESSOR_GRPC_ADDR
+      value: :8000
+    - name: PROCESSOR_SEED
+      value: '42'
+    - name: PROCESSOR_LATENCY_MIN
+      value: 20ms
+    - name: PROCESSOR_LATENCY_MAX
+      value: 150ms
+    - name: PROCESSOR_TIMEOUT_RATE
+      value: '0'
+    - name: VAULT_ADDRESS
+      value: vault-simulator.payment-gateway.svc.cluster.local:8001
+    database: processor
+  vault-simulator:
+    image:
+      repository: ghcr.io/phuchoang2603/payment-gateway-fraud-detection/vault-simulator
+    mesh:
+      rules:
+      - callers:
+        - edge
+        ports:
+        - 8000
+      - callers:
+        - processor-simulator
+        ports:
+        - 8001
+    ports:
+    - name: grpc
+      containerPort: 8000
+      appProtocol: kubernetes.io/h2c
+    - name: processing
+      containerPort: 8001
+      appProtocol: kubernetes.io/h2c
+    env:
+    - name: VAULT_GRPC_ADDR
+      value: :8000
+    - name: VAULT_PROCESSING_ADDR
+      value: :8001
+    - name: VAULT_FINGERPRINT_KEY
+      value: synthetic-fingerprint-v1
+    externalSecrets:
+    - name: vault-keys
+      data:
+      - secretKey: encryption-key
+        remoteKey: GATEWAY_VAULT_ENCRYPTION_KEY
+        env: VAULT_ENCRYPTION_KEY
+    database: vault
+database:
+  name: payment-gateway-pg
+  instances: 1
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.3-system-trixie
+  storage:
+    size: 2Gi
+    storageClass: local-path
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+  # Each owner role owns only its database. Payments migrates as `payments` and serves as `payments_app`.
+  # Doppler keys follow GATEWAY_DB_<ROLE>_PASSWORD.
+  databases:
+    payments:
+      roles:
+        payments_app: {}
+        payments_cdc:
+          replication: true
+      runtimeRole: payments_app
+    fraud:
+      roles:
+        fraud_app: {}
+      runtimeRole: fraud_app
+    notifier: {}
+    vault: {}
+    processor: {}
+redis:
+  name: payment-gateway-redis
+  image:
+    repository: quay.io/opstree/redis
+    tag: v7.2.16
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 640Mi
+  # Sized for the 24 h idempotency window at the design load with headroom.
+  maxmemory: 512mb
+  password:
+    secretName: payment-gateway-redis
+    secretKey: password
+    remoteKey: GATEWAY_REDIS_PASSWORD
+  clients:
+  - payments
+ingress:
+  enabled: true
+  name: payment-gateway-ingress
+  port: 80
+  tunnel:
+    enabled: true
+    clusterTunnel: talos-proxmox
+    hostname: pay-gateway-dev.phuchoang.sbs
+features:
+  enabled: false
+  url: http://feast-server.data.svc.cluster.local:6566
+  service: payment_risk_v1
+  # A read took 60 to 116 ms with four requests at once on dev, so the 100 ms default cut off about half of them.
+  timeout: 250ms
+  ttlDaily: 756h
+  ttlStream: 24h5m
+
+telemetry:
+  cluster: dev-talos
+  environment: dev
+monitoring:
+  enabled: true
+  folder: Payment Gateway
+rollout:
+  metricsAddress: http://vmsingle-vmks.observability.svc.cluster.local:8428
+  weights: [10, 25, 50]
+  analysis:
+    warmup: 5m
+    interval: 1m
+    count: 2
+    window: 5m
+    minimumRequests: 100
+    maximumErrorRate: 0.01
+    maximumP95Seconds: 1
+    maximumSampleAgeSeconds: 120
+# Read with the features. A score at or above the threshold adds a decline when every feature view is available.
+model:
+  url: http://payment-risk-predictor.ml.svc.cluster.local
+  name: payment-risk
+  timeout: 150ms
+  threshold: 0.512

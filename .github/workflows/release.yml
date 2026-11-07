@@ -1,118 +1,77 @@
-name: Release to GHCR & Helm Sync
+name: Service images
 
 on:
   pull_request:
-    paths:
-      - pyproject.toml
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: service-release-${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && format('fork-{0}', github.event.number) || (github.event_name == 'pull_request' && 'dev' || 'prod') }}
+  cancel-in-progress: false
+
+env:
+  DEPLOY_ENVIRONMENT: ${{ github.event_name == 'pull_request' && 'dev' || 'prod' }}
+  DEPLOY_IMAGE_TAG: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.event.number, github.sha) || format('main-{0}', github.sha) }}
+  SOURCE_REF: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.number) || 'refs/heads/main' }}
 
 jobs:
-  check-version:
+  plan:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     outputs:
-      should_skip: ${{ steps.check.outputs.should_skip }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      build: ${{ steps.plan.outputs.build }}
+      image_tags: ${{ steps.plan.outputs.image_tags }}
+      previous: ${{ steps.plan.outputs.previous }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - id: plan
+        run: python3 scripts/release.py plan
 
-      - name: Check if pyproject.toml version changed
-        id: check
-        run: |
-          if git rev-parse HEAD^ >/dev/null 2>&1; then
-            DIFF=$(git diff -U0 HEAD^ -- pyproject.toml)
-          else
-            DIFF=$(git show HEAD:pyproject.toml)
-          fi
+  images:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    name: ${{ matrix.service }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    uses: ./.github/workflows/build-image.yml
+    with:
+      image: ${{ github.repository }}${{ matrix.image-suffix }}
+      context: ${{ matrix.context }}
+      dockerfile: ${{ matrix.dockerfile }}
+      build-args: ${{ matrix.build-args || '' }}
+      publish: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
 
-          echo "DIFF=$DIFF"
-
-          if echo "$DIFF" | grep -E '^+\s*version\s*='; then
-            echo "should_skip=false" >> $GITHUB_OUTPUT
-            echo "Detected version change. should_skip=false"
-          else
-            echo "should_skip=true" >> $GITHUB_OUTPUT
-            echo "No version change found. should_skip=true"
-          fi
-
-  build-and-push:
-    name: Build & Push to GHCR using pyproject version
-    needs: check-version
-    if: needs.check-version.outputs.should_skip != 'true'
+  deploy:
+    needs: [plan, images]
+    if: >-
+      always() && !cancelled() && needs.plan.result == 'success' &&
+      (needs.images.result == 'success' || (needs.plan.outputs.build == 'false' && needs.images.result == 'skipped')) &&
+      (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'pull_request' && 'dev' || 'prod' }}
     permissions:
-      contents: read
-      packages: write
+      contents: write
+      actions: read
     env:
-      GHCR_IMAGE: ghcr.io/${{ github.repository }}
-    outputs:
-      version: ${{ steps.version.outputs.VERSION }}
-      image: ${{ steps.version.outputs.IMAGE }}
+      IMAGE_TAGS: ${{ needs.plan.outputs.image_tags }}
+      PREVIOUS_RELEASE: ${{ needs.plan.outputs.previous }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Extract version from pyproject.toml
-        id: version
-        run: |
-          VERSION=$(grep -Po '(?<=^version = ")[^"]+' pyproject.toml)
-          echo "VERSION=$VERSION"
-          echo "VERSION_TAG=v$VERSION" >> $GITHUB_ENV
-
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-          echo "IMAGE=${{ env.GHCR_IMAGE }}" >> $GITHUB_OUTPUT
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v2
+      - uses: actions/checkout@v7.0.1
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and Push Docker image to GHCR
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: |
-            ${{ env.GHCR_IMAGE }}:${{ env.VERSION_TAG }}
-
-  update-helm-values:
-    name: Update Helm Values
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    env:
-      CHART_FILE: deployments/helm-charts/fraud-detection/Chart.yaml
-      VALUE_FILE: deployments/helm-charts/fraud-detection/values.yaml
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: "${{ github.head_ref || github.ref_name }}"
-          fetch-depth: 0 # important for PR creation
-
-      - name: Set up Git config
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Install yq
-        run: |
-          sudo wget https://github.com/mikefarah/yq/releases/download/v4.40.5/yq_linux_amd64 -O /usr/bin/yq
-          sudo chmod +x /usr/bin/yq
-
-      - name: Update Chart.yaml & values.yaml with version
-        run: |
-          VERSION="v${{ needs.build-and-push.outputs.version }}"
-          IMAGE="${{ needs.build-and-push.outputs.image }}"
-
-          yq eval ".version = \"${VERSION#v}\" |
-                   .appVersion = \"${VERSION#v}\"" \
-                   -i "$CHART_FILE"
-
-          yq eval ".image.repository = \"$IMAGE\" |
-                   .image.tag = \"$VERSION\"" \
-                   -i "$VALUE_FILE"
-
-          git add "$CHART_FILE" "$VALUE_FILE"
-          git commit -m "ci: update Helm values.yaml and Chart.yaml to $IMAGE:$VERSION"
-          git push origin HEAD
+          fetch-depth: 0
+      - name: Wait for every other check on this commit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CHECK_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 scripts/release.py wait-checks
+      - name: Publish the GitOps release
+        run: python3 scripts/release.py publish

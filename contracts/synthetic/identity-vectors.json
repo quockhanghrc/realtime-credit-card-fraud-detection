@@ -1,0 +1,136 @@
+{
+  "uuid_namespace": "71088b85-53a3-5ed5-bf27-8ea372bf796d",
+  "integration_id": "01234567-89ab-4cde-8fab-0123456789ab",
+  "ids": [
+    {
+      "kind": "merchant",
+      "external_id": "seller-01",
+      "expected": "0a1da25b-c927-5084-8f10-f33b3eced9b4"
+    },
+    {
+      "kind": "customer",
+      "external_id": "buyer-01",
+      "expected": "87d92bde-0bc7-5d3d-be21-113c6bbebd1e"
+    }
+  ],
+  "synthetic_key": "synthetic-fingerprint-v1",
+  "synthetic_key_version": "v1",
+  "fingerprints": [
+    {
+      "kind": "address",
+      "input": "  42  MAIN St   Apt 5 ",
+      "normalized": "42 main st apt 5",
+      "expected": "3e749dce5096ba78de0bd0faebbd401473ce860f9810c7f6571377c8ff8643a6"
+    },
+    {
+      "kind": "ip_network",
+      "input": "203.0.113.77",
+      "normalized": "203.0.113.0/24",
+      "expected": "cb67edbe05e7d95ff6abc00b5b7721eadb7f73326599a73f83bee60bd4678c72"
+    },
+    {
+      "kind": "payment_method",
+      "input": "tok_card-0001_ok",
+      "normalized": "card-0001",
+      "expected": "b1da4f34aef8ad201aacc913ded9afaecf07632414b82c70bdfbcdcc78f40b7a"
+    }
+  ],
+  "test_cards": [
+    {
+      "number": "4111000000000008",
+      "card_ref": "card-000000",
+      "behavior": "ok",
+      "expected": "7f4ea7c5144e52ad1c2a489e7f1b03c0160af93ad9f7ac0feedebca6ebb2d95b"
+    },
+    {
+      "number": "4111000009999994",
+      "card_ref": "card-999999",
+      "behavior": "ok",
+      "expected": "ce8666f702170517c27a841b7f9b8007ef62a7f95d3e77c80ae241406e8e5b2a"
+    },
+    {
+      "number": "4111000010000006",
+      "card_ref": "card-1000000",
+      "behavior": "ok",
+      "expected": "9c4ca3b4844f28c31804f7e10e47e9bdcd73fc78f4beb80e6a5e8882908a24fb"
+    },
+    {
+      "number": "4111000038999999",
+      "card_ref": "card-3899999",
+      "behavior": "ok",
+      "expected": "96fc2c04730b4d9d7d2f02690dc66b40e23ab5108fc8017e270704137987a5ab"
+    },
+    {
+      "number": "4112000000000007",
+      "card_ref": "card-000000",
+      "behavior": "nsf",
+      "expected": "7f4ea7c5144e52ad1c2a489e7f1b03c0160af93ad9f7ac0feedebca6ebb2d95b"
+    },
+    {
+      "number": "4112000009999993",
+      "card_ref": "card-999999",
+      "behavior": "nsf",
+      "expected": "ce8666f702170517c27a841b7f9b8007ef62a7f95d3e77c80ae241406e8e5b2a"
+    },
+    {
+      "number": "4112000010000005",
+      "card_ref": "card-1000000",
+      "behavior": "nsf",
+      "expected": "9c4ca3b4844f28c31804f7e10e47e9bdcd73fc78f4beb80e6a5e8882908a24fb"
+    },
+    {
+      "number": "4112000038999998",
+      "card_ref": "card-3899999",
+      "behavior": "nsf",
+      "expected": "96fc2c04730b4d9d7d2f02690dc66b40e23ab5108fc8017e270704137987a5ab"
+    },
+    {
+      "number": "4113000000000006",
+      "card_ref": "card-000000",
+      "behavior": "issuer",
+      "expected": "7f4ea7c5144e52ad1c2a489e7f1b03c0160af93ad9f7ac0feedebca6ebb2d95b"
+    },
+    {
+      "number": "4113000009999992",
+      "card_ref": "card-999999",
+      "behavior": "issuer",
+      "expected": "ce8666f702170517c27a841b7f9b8007ef62a7f95d3e77c80ae241406e8e5b2a"
+    },
+    {
+      "number": "4113000010000004",
+      "card_ref": "card-1000000",
+      "behavior": "issuer",
+      "expected": "9c4ca3b4844f28c31804f7e10e47e9bdcd73fc78f4beb80e6a5e8882908a24fb"
+    },
+    {
+      "number": "4113000038999997",
+      "card_ref": "card-3899999",
+      "behavior": "issuer",
+      "expected": "96fc2c04730b4d9d7d2f02690dc66b40e23ab5108fc8017e270704137987a5ab"
+    },
+    {
+      "number": "4114000000000005",
+      "card_ref": "card-000000",
+      "behavior": "invalid",
+      "expected": "7f4ea7c5144e52ad1c2a489e7f1b03c0160af93ad9f7ac0feedebca6ebb2d95b"
+    },
+    {
+      "number": "4114000009999991",
+      "card_ref": "card-999999",
+      "behavior": "invalid",
+      "expected": "ce8666f702170517c27a841b7f9b8007ef62a7f95d3e77c80ae241406e8e5b2a"
+    },
+    {
+      "number": "4114000010000003",
+      "card_ref": "card-1000000",
+      "behavior": "invalid",
+      "expected": "9c4ca3b4844f28c31804f7e10e47e9bdcd73fc78f4beb80e6a5e8882908a24fb"
+    },
+    {
+      "number": "4114000038999996",
+      "card_ref": "card-3899999",
+      "behavior": "invalid",
+      "expected": "96fc2c04730b4d9d7d2f02690dc66b40e23ab5108fc8017e270704137987a5ab"
+    }
+  ]
+}

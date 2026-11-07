@@ -1,0 +1,64 @@
+syntax = "proto3";
+package payments.v1;
+
+option go_package = "github.com/phuchoang2603/payment-gateway-fraud-detection/shared/proto/payments/v1;paymentsv1";
+import "google/protobuf/timestamp.proto";
+
+// Amounts are integer minor units in the specified ISO 4217 currency.
+message Money { int64 minor_units = 1; string currency = 2; }
+message MerchantRef { string merchant_id = 1; string external_seller_id = 2; }
+message CustomerRef { string customer_id = 1; string external_buyer_id = 2; }
+message LineItem {
+  string product_id = 1;
+  string category = 2;
+  string condition = 3;
+  int32 quantity = 4;
+  Money unit_price = 5;
+}
+message ShippingLocation {
+  string country = 1;
+  string region = 2;
+  string postal_code = 3;
+  string address_fingerprint = 4;
+}
+// Frozen at payment creation. No buyer PII, street lines or raw credentials.
+message CheckoutSnapshot {
+  string external_order_id = 1;
+  Money total = 2;
+  repeated LineItem items = 3;
+  google.protobuf.Timestamp merchant_account_created_at = 4;
+  google.protobuf.Timestamp customer_account_created_at = 5;
+  ShippingLocation shipping = 6;
+}
+message AttemptContext {
+  MerchantRef merchant = 1;
+  CustomerRef customer = 2;
+  CheckoutSnapshot snapshot = 3;
+}
+message PaymentMethod { string type = 1; string fingerprint = 2; }
+// Unobserved optional signals remain absent, not empty or zero.
+message AttemptSignals {
+  google.protobuf.Timestamp attempted_at = 1;
+  PaymentMethod payment_method = 2;
+  optional string device_fingerprint = 3;
+  optional string ip_country = 4;
+  optional string ip_network_fingerprint = 5;
+  optional string user_agent_family = 6;
+}
+enum RiskOutcome {
+  RISK_OUTCOME_UNSPECIFIED = 0;
+  RISK_OUTCOME_APPROVE = 1;
+  RISK_OUTCOME_DECLINE = 2;
+}
+// Shared by fraud.v1 Decide and RiskDecisionRecorded.
+message RiskAssessment {
+  RiskOutcome outcome = 1;
+  repeated string reason_codes = 2;
+  string policy_version = 3;
+  optional string model_version = 4;
+  optional string feature_set_version = 5;
+  optional double risk_score = 6;
+  string assessment_id = 7;
+  // Hash of the immutable JSON evidence retained by Fraud, not its protobuf projection.
+  string evidence_sha256 = 8;
+}

@@ -1,0 +1,17 @@
+telemetry:
+  cluster: prod-talos
+  environment: prod
+database:
+  nodeSelector:
+    talos.dev/capacity-type: on-demand
+  storage:
+    storageClass: cloud-block
+ingress:
+  tunnel:
+    hostname: pay-gateway.phuchoang.sbs
+services:
+  edge:
+    telemetry:
+      metricExportInterval: 30000
+features:
+  enabled: true

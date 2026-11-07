@@ -41,6 +41,7 @@ nosetests.xml
 coverage.xml
 *.cover
 .hypothesis/
+mutants/
 
 # Pytest
 .pytest_cache/
@@ -61,8 +62,6 @@ dmypy.json
 
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
-simulated-data-raw
-simulated-data-transformed
 
 # dotenv
 .env
@@ -84,3 +83,13 @@ simulated-data-transformed
 # OS-specific files
 .DS_Store
 Thumbs.db
+
+# Local development shell state
+.devenv/
+.direnv/
+.ruff_cache/
+/.pre-commit-config.yaml
+
+# Agents
+.agents/
+.claude/

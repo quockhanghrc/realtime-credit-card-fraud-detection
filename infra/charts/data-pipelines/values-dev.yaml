@@ -1,0 +1,28 @@
+enabled: true
+generator:
+  config: historical-dev.yaml
+bronze:
+  enabled: true
+analytics:
+  enabled: true
+maintenance:
+  enabled: true
+pipeline:
+  enabled: true
+warehouseBenchmark:
+  enabled: true
+dashboards:
+  enabled: true
+sparkEventLogDir: s3a://platform-dev/runs/payment-gateway/spark-events/
+catalog:
+  connectors:
+    object-storage:
+      source:
+        serviceConnection:
+          config:
+            awsConfig:
+              endPointURL: https://minio.home.phuchoang.sbs
+            bucketNames:
+            - platform-dev
+features:
+  enabled: true

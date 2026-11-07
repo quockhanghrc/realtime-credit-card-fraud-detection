@@ -1,0 +1,54 @@
+{{- range $name, $application := .Values.applications }}
+{{- if or (not (hasKey $application "enabled")) $application.enabled }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ printf "%s-%s" $.Values.namePrefix $name }}
+  namespace: argo-cd
+  {{- with $application.syncWave }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ . | quote }}
+  {{- end }}
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: payment-gateway-fraud-detection
+  destination:
+    server: {{ $.Values.destinationServer | quote }}
+    namespace: {{ $application.destinationNamespace }}
+  source:
+    repoURL: {{ $.Values.global.repoURL }}
+    targetRevision: {{ $.Values.global.targetRevision | quote }}
+    path: {{ $application.path }}
+    helm:
+      releaseName: {{ $name }}
+      valueFiles:
+        - {{ printf "values-%s.yaml" ($.Values.environment | default "dev") }}
+      valuesObject:
+        global:
+          imageTags:
+{{ toYaml $.Values.global.imageTags | indent 12 }}
+          imageDigests:
+{{ toYaml ($.Values.global.imageDigests | default dict) | indent 12 }}
+  {{- with $application.ignoreDifferences }}
+  ignoreDifferences:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+    syncOptions:
+      - ServerSideApply=true
+      {{- if $application.ignoreDifferences }}
+      - RespectIgnoreDifferences=true
+      {{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,37 @@
+{{- range $name, $svc := include "payment-gateway.services" . | fromYaml }}
+{{- if $svc.httpRoute.enabled }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  parentRefs:
+    - name: {{ $.Values.ingress.name }}
+  hostnames:
+    {{- toYaml ($svc.httpRoute.hostnames | default (list $.Values.ingress.tunnel.hostname)) | nindent 4 }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: {{ $svc.httpRoute.pathPrefix }}
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: X-Forwarded-Proto
+                value: https
+      timeouts:
+        {{- toYaml $svc.httpRoute.timeouts | nindent 8 }}
+      backendRefs:
+        - name: {{ $name }}
+          port: {{ (first $svc.ports).containerPort }}
+          {{- if eq $name "edge" }}
+          weight: 100
+        - name: edge-canary
+          port: {{ (first $svc.ports).containerPort }}
+          weight: 0
+          {{- end }}
+{{- end }}
+{{- end }}

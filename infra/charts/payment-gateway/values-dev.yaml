@@ -1,0 +1,11 @@
+telemetry:
+  cluster: dev-talos
+  environment: dev
+database:
+  storage:
+    storageClass: local-path
+ingress:
+  tunnel:
+    hostname: pay-gateway-dev.phuchoang.sbs
+features:
+  enabled: true

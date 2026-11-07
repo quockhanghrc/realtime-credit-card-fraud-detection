@@ -1,0 +1,119 @@
+global:
+  repoURL: https://github.com/phuchoang2603/payment-gateway-fraud-detection.git
+  targetRevision: HEAD
+  imageTags:
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/edge: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/payments: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/notifier: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/vault-simulator: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/processor-simulator: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/connect-debezium: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/schema-register: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/live-simulator: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/data-platform-metadata: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/feast: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/streaming: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/ml: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/drift: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/risk-serving: dev
+destinationServer: https://kubernetes.default.svc
+namePrefix: payment-gateway
+applications:
+  secret-store:
+    destinationNamespace: payment-gateway
+    path: infra/charts/secret-store
+  kafka:
+    destinationNamespace: payment-gateway
+    path: infra/charts/kafka
+  payment-gateway:
+    destinationNamespace: payment-gateway
+    path: infra/charts/payment-gateway
+    ignoreDifferences:
+      - group: gateway.networking.k8s.io
+        kind: HTTPRoute
+        namespace: payment-gateway
+        name: edge
+        jqPathExpressions: [".spec.rules[].backendRefs[].weight"]
+      - group: ""
+        kind: Service
+        namespace: payment-gateway
+        name: edge
+        jsonPointers: [/spec/selector/rollouts-pod-template-hash]
+      - group: ""
+        kind: Service
+        namespace: payment-gateway
+        name: edge-canary
+        jsonPointers: [/spec/selector/rollouts-pod-template-hash]
+  live-traffic:
+    enabled: false
+    destinationNamespace: payment-gateway
+    path: infra/charts/live-traffic
+  data-pipelines:
+    destinationNamespace: data
+    path: infra/charts/data-pipelines
+    syncWave: "2"
+  lakehouse:
+    destinationNamespace: data
+    path: infra/charts/lakehouse
+    syncWave: "1"
+  clickhouse:
+    destinationNamespace: data
+    path: infra/charts/clickhouse
+  # The LLM applications stay off in every environment until the cluster has capacity and the llm namespace is allowed.
+  llm-platform:
+    enabled: false
+    destinationNamespace: llm
+    path: infra/charts/llm-platform
+    # KEDA owns the agents' worker pool size; the chart only sets its starting size.
+    ignoreDifferences:
+      - group: ate.dev
+        kind: WorkerPool
+        jsonPointers: [/spec/replicas]
+      - group: argoproj.io
+        kind: Rollout
+        name: risk-serving
+        namespace: llm
+        jsonPointers: [/spec/replicas]
+      - group: ""
+        kind: Service
+        name: risk-serving
+        namespace: llm
+        jsonPointers: [/spec/selector/rollouts-pod-template-hash]
+      - group: ""
+        kind: Service
+        name: risk-serving-preview
+        namespace: llm
+        jsonPointers: [/spec/selector/rollouts-pod-template-hash]
+  rag-pipeline:
+    enabled: false
+    destinationNamespace: llm
+    path: infra/charts/rag-pipeline
+    ignoreDifferences:
+      - group: argoproj.io
+        kind: Rollout
+        name: rag-api
+        namespace: llm
+        jsonPointers: [/spec/replicas]
+      - group: ""
+        kind: Service
+        name: rag-api
+        namespace: llm
+        jsonPointers: [/spec/selector/rollouts-pod-template-hash]
+      - group: ""
+        kind: Service
+        name: rag-api-preview
+        namespace: llm
+        jsonPointers: [/spec/selector/rollouts-pod-template-hash]
+  ml-training:
+    enabled: false
+    destinationNamespace: ml
+    path: infra/charts/ml-training
+    syncWave: "3"
+    # The promotion pipeline owns the route's weights, as the Edge rollout owns its own.
+    ignoreDifferences:
+      - group: gateway.networking.k8s.io
+        kind: HTTPRoute
+        namespace: ml
+        name: payment-risk-ab
+        jqPathExpressions: [".spec.rules[].backendRefs[].weight"]

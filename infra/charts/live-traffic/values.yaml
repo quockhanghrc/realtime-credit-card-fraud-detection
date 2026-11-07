@@ -1,0 +1,42 @@
+global:
+  imageTags:
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/live-simulator: dev
+image:
+  repository: ghcr.io/phuchoang2603/payment-gateway-fraud-detection/live-simulator
+secretStore: gateway-doppler
+kafkaBrokers: payment-gateway-kafka-kafka-bootstrap.payment-gateway.svc:9092
+simulator:
+  enabled: false
+  runAsJob: false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: '1'
+      memory: 2Gi
+  config:
+    manifest: s3://platform-dev/datasets/payment-gateway/historical/v18/manifest.json
+    manifest_sha256: ''
+    gateway_url: http://edge.payment-gateway.svc:8080
+    return_url: https://example.com/checkout/complete
+    duration_seconds: 300
+    payments_per_second: 1
+    concurrency: 4
+    label_time_scale: 1
+    late_rate: 0
+    late_min_seconds: 300
+    late_max_seconds: 600
+    redelivery:
+      enabled: false
+      rate: 0.015
+    # Drift steps change the drawn purchases from an offset of the run, for example:
+    #   - {after_seconds: 3600, foreign_ip_probability: 0.15, amount_scale: 1.8}
+    drift: []
+objectStorage:
+  endpoint: https://minio.home.phuchoang.sbs
+  region: us-east-1
+  pathStyle: true
+  bucket: platform-dev
+  prefix: datasets/payment-gateway

@@ -1,105 +1,48 @@
-# Scalable Real-Time Credit Card Fraud Detection System
+# Payment Gateway and Real-Time Fraud Detection
 
-This repository contains a complete end-to-end system for real-time credit card fraud detection, including data analysis notebooks, a machine learning API, and infrastructure-as-code for cloud deployment. The system is designed with a modern, observable, and scalable architecture.
+A payment gateway for a refurbished-electronics marketplace, built to connect reliable checkout with real-time fraud decisions and explainable investigations. Payment events feed streaming and historical data pipelines for model training, scoring and analyst agents, using synthetic cards and fraud labels. See the [project wiki](https://github.com/phuchoang2603/payment-gateway-fraud-detection/wiki) for the architecture and implementation.
 
-![mlops1-arch](./docs/images/mlops1-arch.excalidraw.svg)
+## Payment gateway, data pipeline and ML
 
-## Table of Contents
+- **Gateway:** Go services, Postgres, Kafka CDC, idempotent payment attempts, timeout recovery and signed webhooks. Integrates with the [marketplace](https://github.com/phuchoang2603/refurbished-marketplace). [Architecture](https://github.com/phuchoang2603/payment-gateway-fraud-detection/wiki/architecture).
+- **Lakehouse:** Spark Bronze → Silver → Gold, audited publication and OpenMetadata lineage. **133.5 GB** synthetic v19 source dataset (AWS run). [Offline data](https://github.com/phuchoang2603/payment-gateway-fraud-detection/wiki/offline).
+- **Warehouse:** ClickHouse marts and skip indexes. Same-query GCP plan: **5,541 → 156 granules, 97.18% fewer**, with query-condition cache disabled. [Storage](https://github.com/phuchoang2603/payment-gateway-fraud-detection/wiki/storage).
+- **Streaming:** shared Java Flink operators for live traffic and historical replay; Feast/Redis for online features. Parity tests compare **2,498 snapshots from 503 deliveries**. [Replay](https://github.com/phuchoang2603/payment-gateway-fraud-detection/wiki/online#historical-replay) · [Feature store](https://github.com/phuchoang2603/payment-gateway-fraud-detection/wiki/feature-store).
+- **ML:** Kubeflow/Katib, GPU XGBoost, Triton and drift-triggered retraining. Dev synthetic test set: **PR-AUC 0.9370**, **91.1% recall at 1% FPR**. [Training](https://github.com/phuchoang2603/payment-gateway-fraud-detection/wiki/training) · [Pipeline](https://github.com/phuchoang2603/payment-gateway-fraud-detection/wiki/pipeline).
 
-<!--toc:start-->
+[![Payment gateway, lakehouse, streaming features and ML pipeline](docs/payment-gateway/images/payment-flow.png)](docs/payment-gateway/images/payment-flow.png)
 
-- [Scalable Real-Time Credit Card Fraud Detection System](#scalable-real-time-credit-card-fraud-detection-system)
-  - [Table of Contents](#table-of-contents)
-  - [Demo Video](#demo-video)
-  - [Repository Structure](#repository-structure)
-  - [System Architecture](#system-architecture)
-  - [Installation and Usage](#installation-and-usage)
-    - [Local Deployment with Docker Compose](#local-deployment-with-docker-compose)
-    - [Local Deployment with Kubernetes (on Proxmox)](#local-deployment-with-kubernetes-on-proxmox)
-    - [Cloud Deployment on GKE with Terraform & GitOps](#cloud-deployment-on-gke-with-terraform-gitops)
-  - [CI/CD Pipeline](#cicd-pipeline) - [Continuous Integration & Testing](#continuous-integration-testing) - [Continuous Deployment](#continuous-deployment)
-  <!--toc:end-->
+## LLM and agents
 
-## Demo Video
+- **Agents:** coordinator, evidence and risk agents; read-only tools, cited knowledge retrieval and Langfuse prompts/traces. [Agents](https://github.com/phuchoang2603/payment-gateway-fraud-detection/wiki/agents).
+- **Model access:** agentgateway API keys, rate limits, PII masking and request screening; vLLM/KServe inference. [Gateway](https://github.com/phuchoang2603/payment-gateway-fraud-detection/wiki/gateway) · [Inference](https://github.com/phuchoang2603/payment-gateway-fraud-detection/wiki/inference).
+- **Knowledge API:** dev load test, 60 users over 5 minutes: **140.31 requests/s**, **p95 310 ms**, **0 failures across 41,945 requests**. [RAG](https://github.com/phuchoang2603/payment-gateway-fraud-detection/wiki/rag).
 
-Watch a brief overview and demo of the system in action:
+![Agents, model gateway, inference and knowledge tools](docs/llm/images/llm-architecture.png)
 
-[![Demo](https://img.youtube.com/vi/SOBmdxpqs5E/0.jpg)](https://youtu.be/SOBmdxpqs5E)
+## Deployment and security
 
-## Repository Structure
+- **Platform:** Talos on Proxmox (dev) and GCP (prod), OpenTofu, Argo CD and shared operators, owned by [talos-proxmox](https://github.com/phuchoang2603/talos-proxmox).
+- **Delivery:** GitHub Actions → GHCR → Argo CD; Istio checkout canary stages at **10%, 25%, 50%**. [CI](https://github.com/phuchoang2603/payment-gateway-fraud-detection/wiki/ci) · [Delivery](https://github.com/phuchoang2603/payment-gateway-fraud-detection/wiki/cd).
+- **Access:** Cloudflare Tunnel/HTTPS, Istio ambient mTLS, service-account policies and Doppler/External Secrets. [Networking](https://github.com/phuchoang2603/payment-gateway-fraud-detection/wiki/networking) · [Security](https://github.com/phuchoang2603/payment-gateway-fraud-detection/wiki/security).
 
-The repository is organized into distinct directories, each serving a specific purpose.
+![Application delivery, infrastructure, secrets and service mesh](docs/deployment/images/deployment-security.png)
 
-```
-.
-├── app/                  # Contains the FastAPI application source code.
-├── client/               # A Python client to simulate requests to the API.
-├── deployments/          # Infrastructure (Terraform) and application (Argo CD, Helm) manifests for GitOps.
-├── tests/                # Unit and integration tests for the application.
-└── pyproject.toml        # Project metadata and dependency management.
-```
+## Repository structure
 
-## System Architecture
+| Path | Contents |
+|---|---|
+| `src/payment-gateway/` | Go payment services and synthetic vault/processor |
+| `src/data-pipeline/` | Java Flink, Python simulators, Spark, Feast and catalog jobs |
+| `src/ml/` | Training, evaluation, registry, serving and drift |
+| `src/llm/` | Agents, RAG pipeline and knowledge API/MCP tools |
+| `contracts/` | Protobuf, data-product contracts and feature definitions |
+| `infra/` | Application Dockerfiles, Helm charts and Argo CD releases |
+| `openspec/` | Specifications and changes |
+| `docs/` | Project wiki sources |
+| `scripts/` | CI, generation, releases and wiki publication |
 
-The system is designed to run in two primary environments: locally via Docker Compose for development and on Google Kubernetes Engine (GKE) for production, managed via a GitOps workflow.
+## Getting started
 
-- **Fraud Detection API**: A FastAPI server that exposes a prediction endpoint. It is instrumented with OpenTelemetry for collecting metrics, logs, and traces.
-- **Client Simulator**: A Python script that continuously sends transaction data to the API to simulate real-world traffic.
-- **Observability Stack**:
-  - **Alloy**: The collector agent that gathers telemetry data from the API and host environment.
-  - **Loki**: The backend for log aggregation and storage.
-  - **Tempo**: The backend for distributed trace storage.
-  - **Prometheus**: The backend for metrics storage and alerting.
-  - **Grafana**: The unified dashboard for visualizing all logs, metrics, and traces.
-- **Traefik**: The Ingress Controller managing external access to services.
-- **Cert-Manager**: Provides automatic TLS certificate provisioning.
-
-## Installation and Usage
-
-This project can be run locally for development or deployed to a cloud environment.
-
-### Local Deployment with Docker Compose
-
-For a quick and easy local setup, use the provided Docker Compose configuration. This will spin up the API, the client simulator, and the entire observability stack on your local machine.
-
-**To run the local Docker environment, simply run the following command in the [deployments/docker-compose](./deployments/docker-compose/) folder:**
-
-```bash
-cd deployments/docker-compose
-docker compose up --build -d
-```
-
-### Local Deployment with Kubernetes (on Proxmox)
-
-For those looking to replicate a full cloud-native environment on-premise, this project can be deployed on a Kubernetes cluster running on Proxmox VE. This setup offers a powerful local alternative to GKE for development and testing.
-
-**For a complete guide on setting up the Kubernetes cluster, see the [kubernetes-proxmox](https://github.com/phuchoang2603/kubernetes-proxmox) repository.**
-
-### Cloud Deployment on GKE with Terraform & GitOps
-
-For a production-grade setup, you can provision the infrastructure on Google Kubernetes Engine (GKE) using Terraform and manage all applications via a GitOps workflow with Argo CD.
-
-**For a complete, end-to-end guide, see the instructions in the [deployments](./docs/deployment.md) folder.**
-
-## CI/CD Pipeline
-
-### Continuous Integration & Testing
-
-This repository uses **GitHub Actions** to automate code quality checks and testing. The workflow, defined [here](.github/workflows/lint-test.yml), runs on every push and pull request to ensure the codebase remains clean and functional.
-
-The CI pipeline includes the following stages:
-
-- **Linting**: Code is linted using `ruff` to enforce style consistency and catch common errors.
-- **Testing**: Unit tests for the FastAPI application are executed using **Pytest**. This ensures that the core API logic remains correct and reliable. The tests can be found in the `tests/` directory.
-
-### Continuous Deployment
-
-This project automates its release process using a **Continuous Deployment** pipeline powered by GitHub Actions, as defined [here](.github/workflows/release.yml). This workflow prepares new versions of the application for deployment in the GitOps-managed environment.
-
-The CD pipeline is triggered automatically when a new version tag (e.g., `v1.2.3`) is changed in `pyproject.toml` file and pushed to the repository. It then performs the following steps:
-
-1. **Build & Push Images**: It builds multi-platform Docker images for the `api` services.
-2. **Push to Registry**: The newly created images are pushed to the Github Artifact Registry (GHCR).
-3. **Update Manifests**: The workflow checks out the repository, updates the Helm chart's `values.yaml` file with the new image tag, and commits this change back to the repository.
-
-This final commit triggers Argo CD to automatically detect the change in the Git repository and deploy the new version of the application to the Kubernetes cluster, completing the GitOps cycle.
+- Install Nix and devenv; run `devenv shell`.
+- See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and local checks.

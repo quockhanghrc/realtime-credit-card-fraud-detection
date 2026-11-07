@@ -1,0 +1,114 @@
+apiVersion: clickhouse.altinity.com/v1
+kind: ClickHouseInstallation
+metadata:
+  name: clickhouse
+  namespace: {{ .Values.namespace }}
+spec:
+  defaults:
+    templates:
+      podTemplate: clickhouse
+      dataVolumeClaimTemplate: data
+  configuration:
+    clusters:
+      - name: shared
+        layout:
+          shardsCount: 1
+          replicasCount: 1
+    profiles:
+      default/allow_database_iceberg: 1
+      openmetadata/readonly: 2
+      openmetadata/allow_database_iceberg: 1
+      openmetadata/show_data_lake_catalogs_in_system_tables: 1
+      # Dashboards: readonly 2 still blocks writes and DDL but allows the SET statements the Grafana plugin sends;
+      # the constraints stop a dashboard from raising its own limits.
+      grafana/readonly: 2
+      grafana/max_execution_time: 30
+      grafana/max_memory_usage: 1073741824
+      grafana/max_result_rows: 100000
+      grafana/result_overflow_mode: break
+      grafana/max_threads: 2
+      grafana/constraints/readonly/const: ""
+      # clickhouse-go, under the Grafana plugin, sends max_execution_time = time left to the request deadline + 5 s;
+      # the plugin's query timeout is 60 s, so up to 65.
+      grafana/constraints/max_execution_time/max: 65
+      grafana/constraints/max_memory_usage/max: 1073741824
+      grafana/constraints/max_result_rows/max: 100000
+      marts/allow_database_iceberg: 1
+      marts/max_memory_usage: 2147483648
+      marts/join_algorithm: full_sorting_merge
+      marts/max_bytes_before_external_sort: 400000000
+      marts/max_bytes_before_external_group_by: 800000000
+      marts/max_insert_threads: 2
+    users:
+      default/networks/ip: [127.0.0.1, "::1"]
+      admin/password:
+        valueFrom: {secretKeyRef: {name: clickhouse-admin, key: password}}
+      admin/networks/ip: ["10.0.0.0/8"]
+      admin/profile: default
+      admin/access_management: 1
+      langfuse/password:
+        valueFrom: {secretKeyRef: {name: clickhouse-langfuse, key: password}}
+      langfuse/networks/ip: ["10.0.0.0/8"]
+      langfuse/profile: default
+      langfuse/grants/query:
+        - GRANT ALL ON langfuse.*
+        - GRANT SELECT ON system.*
+      openmetadata/password:
+        valueFrom: {secretKeyRef: {name: clickhouse-openmetadata, key: password}}
+      openmetadata/networks/ip: ["10.0.0.0/8"]
+      openmetadata/profile: openmetadata
+      openmetadata/grants/query:
+        - GRANT SELECT ON lakehouse.*
+        - GRANT SELECT ON marts.*
+        - GRANT SELECT ON system.databases
+        - GRANT SELECT ON system.tables
+        - GRANT SELECT ON system.columns
+      grafana/password:
+        valueFrom: {secretKeyRef: {name: clickhouse-grafana, key: password}}
+      grafana/networks/ip: ["10.0.0.0/8"]
+      grafana/profile: grafana
+      grafana/grants/query:
+        - GRANT SELECT ON marts.*
+      marts/password:
+        valueFrom: {secretKeyRef: {name: clickhouse-marts, key: password}}
+      marts/networks/ip: ["10.0.0.0/8"]
+      marts/profile: marts
+      marts/grants/query:
+        - GRANT SELECT, INSERT, CREATE TABLE, DROP TABLE, ALTER, TRUNCATE ON marts.*
+        - GRANT SELECT, INSERT, CREATE TABLE, DROP TABLE ON marts_benchmark.*
+        - GRANT SELECT ON lakehouse.*
+        - GRANT SELECT ON system.query_log
+        - GRANT SYSTEM DROP CACHE, SYSTEM FLUSH LOGS ON *.*
+    settings:
+      logger/level: warning
+      timezone: UTC
+      max_server_memory_usage_to_ram_ratio: 0.85
+      mark_cache_size: 536870912
+      # Merged-away parts are kept this long before deletion (default 480 s). A mart build writes and merges about
+      # 13 GiB of staging parts within minutes, and their leftovers filled the 30 GiB volume in September 2026.
+      merge_tree/old_parts_lifetime: 60
+  templates:
+    podTemplates:
+      - name: clickhouse
+        spec:
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: clickhouse
+              image: {{ .Values.image }}
+              resources:
+                {{- toYaml .Values.resources | nindent 16 }}
+    volumeClaimTemplates:
+      - name: data
+        spec:
+          accessModes: [ReadWriteOnce]
+          storageClassName: {{ .Values.storageClass }}
+          resources:
+            requests:
+              storage: {{ .Values.storageSize }}

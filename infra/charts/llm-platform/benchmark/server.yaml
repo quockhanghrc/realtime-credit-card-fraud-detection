@@ -1,0 +1,88 @@
+# Standalone chat server for model-server variants. Set models.chat.stopped in the chart first to free the GPU,
+# edit the args below for one variant, then: kubectl apply -f server.yaml (delete it after the run).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: llm-bench-vllm
+  namespace: llm
+  labels:
+    app.kubernetes.io/name: llm-bench-vllm
+spec:
+  serviceAccountName: llm-benchmark
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    seccompProfile: {type: RuntimeDefault}
+  resourceClaims:
+    - name: gpu
+      resourceClaimName: llm-gpu
+  containers:
+    - name: vllm
+      image: vllm/vllm-openai:v0.32.0
+      args:
+        - RedHatAI/Qwen3.5-4B-FP8-dynamic
+        - --revision=397b7ba47a99b3221ebfc0cfc5a279118cb733ad
+        - --served-model-name=qwen35-4b
+        - --port=8000
+        - --language-model-only
+        - --max-model-len=32768
+        - --gpu-memory-utilization=0.76
+        - --kv-cache-dtype=fp8
+        - --max-num-seqs=32
+        - --reasoning-parser=qwen3
+        - --default-chat-template-kwargs={"enable_thinking":false}
+        - --enable-auto-tool-choice
+        - --tool-call-parser=qwen3_coder
+      env:
+        - {name: HOME, value: /home}
+        - {name: USER, value: vllm}
+      ports:
+        - {name: http, containerPort: 8000}
+      readinessProbe:
+        httpGet: {path: /health, port: 8000}
+        periodSeconds: 5
+      resources:
+        requests: {cpu: "1", memory: 8Gi}
+        limits: {memory: 12Gi}
+        claims:
+          - name: gpu
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: {drop: [ALL]}
+      volumeMounts:
+        - {name: home, mountPath: /home}
+        - {name: shm, mountPath: /dev/shm}
+  volumes:
+    - name: home
+      emptyDir: {}
+    - name: shm
+      emptyDir: {medium: Memory, sizeLimit: 1Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-bench-vllm
+  namespace: llm
+spec:
+  selector:
+    app.kubernetes.io/name: llm-bench-vllm
+  ports:
+    - {name: http, port: 8000, targetPort: http}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: llm-bench-vllm
+  namespace: llm
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: llm-bench-vllm
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: [cluster.local/ns/llm/sa/llm-benchmark]

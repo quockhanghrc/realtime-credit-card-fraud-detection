@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: payment-gateway-fraud-detection
+  namespace: argo-cd
+spec:
+  description: Gateway applications and data jobs on the shared platform
+  sourceRepos:
+  - https://github.com/phuchoang2603/payment-gateway-fraud-detection.git
+  destinations:
+  - server: https://kubernetes.default.svc
+    namespace: argo-cd
+  - server: https://kubernetes.default.svc
+    namespace: payment-gateway
+  - server: https://kubernetes.default.svc
+    namespace: data
+  - server: https://kubernetes.default.svc
+    namespace: ml
+  - server: https://kubernetes.default.svc
+    namespace: llm
+  - server: https://kubernetes.default.svc
+    namespace: llm-agents
+  - server: https://kubernetes.default.svc
+    namespace: observability
+  clusterResourceWhitelist:
+  - group: external-secrets.io
+    kind: ClusterSecretStore

@@ -1,0 +1,124 @@
+{{- if .Values.simulator.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: live-simulator
+automountServiceAccountToken: false
+---
+apiVersion: {{ if .Values.simulator.runAsJob }}batch/v1{{ else }}apps/v1{{ end }}
+kind: {{ if .Values.simulator.runAsJob }}Job{{ else }}Deployment{{ end }}
+metadata:
+  name: live-simulator{{ if .Values.simulator.runAsJob }}-{{ omit .Values "global" | toJson | sha256sum | trunc 10 }}{{ end }}
+spec:
+  {{- if .Values.simulator.runAsJob }}
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ add (int64 .Values.simulator.config.duration_seconds) 120 }}
+  {{- else }}
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: live-simulator
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: live-simulator
+        istio.io/dataplane-mode: ambient
+      annotations:
+        checksum/config: {{ omit .Values "global" | toJson | sha256sum }}
+    spec:
+      {{- if .Values.simulator.runAsJob }}
+      restartPolicy: Never
+      {{- end }}
+      serviceAccountName: live-simulator
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: live-simulator
+          image: {{ include "live-traffic.image" (dict "image" .Values.image "global" .Values.global) | quote }}
+          imagePullPolicy: Always
+          command: [python, -m, simulator.live.runtime]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            {{- toYaml .Values.simulator.resources | nindent 12 }}
+          envFrom:
+            - secretRef:
+                name: live-source
+          env:
+            - name: S3_ENDPOINT
+              value: {{ .Values.objectStorage.endpoint | quote }}
+            - name: AWS_REGION
+              value: {{ .Values.objectStorage.region | quote }}
+            - name: S3_PATH_STYLE
+              value: {{ .Values.objectStorage.pathStyle | toString | quote }}
+            - name: KAFKA_BROKERS
+              value: {{ .Values.kafkaBrokers | quote }}
+            - name: SIMULATOR_CONFIG
+              value: /etc/simulator/live.yaml
+            - name: GATEWAY_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: live-gateway
+                  key: api-key
+          volumeMounts:
+            - name: config
+              mountPath: /etc/simulator
+              readOnly: true
+            - name: scratch
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: live-simulator
+        - name: scratch
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: live-simulator
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: live-simulator
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - podSelector:
+            matchLabels:
+              strimzi.io/cluster: payment-gateway-kafka
+      ports:
+        - {protocol: TCP, port: 9092}
+    - ports:
+        - {protocol: TCP, port: 443}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: edge
+      ports:
+        - {protocol: TCP, port: 8080}
+        - {protocol: TCP, port: 15008}
+{{- end }}

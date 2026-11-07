@@ -1,0 +1,56 @@
+syntax = "proto3";
+package payments.v1;
+
+option go_package = "github.com/phuchoang2603/payment-gateway-fraud-detection/shared/proto/payments/v1;paymentsv1";
+import "google/protobuf/timestamp.proto";
+import "payments/v1/types.proto";
+
+// Versions start at 1 and increase by one per payment; causation is version order.
+// event_id deduplicates deliveries. PaymentCreated starts a history; success or expiry ends it.
+message PaymentEvent {
+  string event_id = 1;
+  string payment_id = 2;
+  uint64 aggregate_version = 3;
+  string integration_id = 4;
+  google.protobuf.Timestamp occurred_at = 5;
+  google.protobuf.Timestamp recorded_at = 6;
+  uint32 schema_version = 7;
+  string correlation_id = 8;
+  oneof payload {
+    PaymentCreated payment_created = 9;
+    AttemptStarted attempt_started = 10;
+    RiskDecisionRecorded risk_decision_recorded = 11;
+    ProcessorOperationRequested processor_operation_requested = 12;
+    ProcessorOutcomeUnknown processor_outcome_unknown = 13;
+    AttemptDeclined attempt_declined = 14;
+    PaymentSucceeded payment_succeeded = 15;
+    PaymentExpired payment_expired = 16;
+  }
+}
+message PaymentCreated {
+  MerchantRef merchant = 1;
+  CustomerRef customer = 2;
+  CheckoutSnapshot snapshot = 3;
+}
+// Only while OPEN with no active attempt; another attempt follows a decline.
+message AttemptStarted { string attempt_id = 1; AttemptSignals signals = 2; AttemptContext context = 3; }
+// Risk decline -> AttemptDeclined(RISK); approval -> processor request ->
+// success, AttemptDeclined(PROCESSOR), or unknown outcome.
+message RiskDecisionRecorded { string attempt_id = 1; RiskAssessment assessment = 2; }
+message ProcessorOperationRequested { string attempt_id = 1; string operation_key = 2; }
+// Unknown resolves only to success or PROCESSOR decline; no expiry or retry.
+message ProcessorOutcomeUnknown { string attempt_id = 1; }
+enum DeclineSource {
+  DECLINE_SOURCE_UNSPECIFIED = 0;
+  DECLINE_SOURCE_RISK = 1;
+  DECLINE_SOURCE_PROCESSOR = 2;
+}
+message AttemptDeclined {
+  string attempt_id = 1;
+  DeclineSource source = 2;
+  string reason = 3;
+}
+// Combined authorization and capture (sale).
+message PaymentSucceeded { string attempt_id = 1; string processor_reference = 2; }
+// Not legal while a processor outcome remains unresolved.
+message PaymentExpired { bool present = 1 [json_name = "_present"]; }

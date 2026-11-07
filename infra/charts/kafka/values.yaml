@@ -1,0 +1,134 @@
+global:
+  imageTags:
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/connect-debezium: dev
+    ghcr.io/phuchoang2603/payment-gateway-fraud-detection/schema-register: dev
+kafka:
+  clusterName: payment-gateway-kafka
+  version: 4.3.1
+  metadataVersion: 4.3-IV0
+  replicas: 1
+  replicationFactor: 1
+  minInsyncReplicas: 1
+  clientNamespace: payment-gateway
+  dataNamespace: data
+  dataClients: [fraud-streaming, feature-writer, data-pipelines]
+  storage:
+    size: 5Gi
+  jvmOptions:
+    -Xms: 512m
+    -Xmx: 512m
+  resources:
+    requests:
+      cpu: 250m
+      memory: 768Mi
+    limits:
+      cpu: '1'
+      memory: 1Gi
+entityOperator:
+  topicOperator:
+    jvmOptions:
+      -Xms: 256m
+      -Xmx: 256m
+    resources:
+      requests:
+        cpu: 50m
+        memory: 384Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+connect:
+  clusterName: payment-gateway-connect
+  image:
+    repository: ghcr.io/phuchoang2603/payment-gateway-fraud-detection/connect-debezium
+  jvmOptions:
+    -Xms: 512m
+    -Xmx: 512m
+  resources:
+    requests:
+      cpu: 250m
+      memory: 768Mi
+    limits:
+      memory: 1Gi
+  livenessProbe:
+    initialDelaySeconds: 180
+    timeoutSeconds: 5
+    periodSeconds: 10
+    failureThreshold: 6
+  readinessProbe:
+    initialDelaySeconds: 120
+    timeoutSeconds: 5
+    periodSeconds: 10
+    failureThreshold: 12
+entities:
+  fraudFeatures:
+    topics:
+    - name: fraud.feature-updates.v2.live-v20
+      valueSchema: features/v2/features.proto
+      partitions: 3
+      retention: 1209600000
+    - name: fraud.feature-rejects.v1.live-v20
+      partitions: 3
+      retention: 604800000
+  payments:
+    topics:
+    - name: payments.events.v1
+      valueSchema: payments/v1/events.proto
+      partitions: 3
+      retention: 604800000
+    - name: fraud.labels.v1
+      valueSchema: payments/v1/labels.proto
+      partitions: 3
+      retention: 604800000
+    connector:
+      name: payments-events
+      sourceSecretName: payments-cdc
+      databaseHost: payment-gateway-pg-rw.payment-gateway.svc.cluster.local
+      databaseName: payments
+      databasePort: 5432
+      slotName: debezium_payments_slot
+      topicPrefix: payments
+      table: public.payment_events
+      publicationAutocreateMode: filtered
+      router:
+        eventId: event_id
+        key: payment_id
+        payload: payload
+        routeByField: event_type
+        topic: payments.events.v1
+schemaRegistry:
+  enabled: true
+  port: 8081
+  compatibility: BACKWARD_TRANSITIVE
+  registration:
+    enabled: true
+    image:
+      repository: ghcr.io/phuchoang2603/payment-gateway-fraud-detection/schema-register
+    activeDeadlineSeconds: 600
+    resources:
+      requests:
+        cpu: 25m
+        memory: 32Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+  image:
+    repository: ghcr.io/aiven-open/karapace
+    tag: 6.2.4
+  resources:
+    requests:
+      cpu: 25m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+monitoring:
+  enabled: true
+  namespace: observability
+  serviceAccount: vmagent-vmks
+  topicRegex: '^(payments\.events\..*|fraud\.(labels|feature-updates|feature-rejects)\..*)$'
+  groupRegex: '^(gateway-notifier|fraud-features-.*|feature-writer(-.*)?|dp1-bronze-watermarks|simulator-redelivery-v1)$'
+  exporterResources:
+    requests: {cpu: 25m, memory: 64Mi}
+    limits: {cpu: 200m, memory: 128Mi}
